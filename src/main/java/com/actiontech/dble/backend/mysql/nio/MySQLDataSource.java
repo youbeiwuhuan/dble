@@ -6,7 +6,6 @@
 package com.actiontech.dble.backend.mysql.nio;
 
 import com.actiontech.dble.backend.datasource.PhysicalDatasource;
-import com.actiontech.dble.backend.heartbeat.DBHeartbeat;
 import com.actiontech.dble.backend.heartbeat.MySQLHeartbeat;
 import com.actiontech.dble.backend.mysql.nio.handler.ResponseHandler;
 import com.actiontech.dble.config.Capabilities;
@@ -35,7 +34,6 @@ public class MySQLDataSource extends PhysicalDatasource {
                            boolean isReadNode) {
         super(config, hostConfig, isReadNode);
         this.factory = new MySQLConnectionFactory();
-
     }
 
     @Override
@@ -68,7 +66,6 @@ public class MySQLDataSource extends PhysicalDatasource {
         // flag |= Capabilities.CLIENT_MULTI_RESULTS;
         return flag;
     }
-
 
 
     private long getClientFlagSha(boolean isConnectWithDB) {
@@ -233,7 +230,7 @@ public class MySQLDataSource extends PhysicalDatasource {
     }
 
     @Override
-    public DBHeartbeat createHeartBeat() {
+    public MySQLHeartbeat createHeartBeat() {
         return new MySQLHeartbeat(this);
     }
 

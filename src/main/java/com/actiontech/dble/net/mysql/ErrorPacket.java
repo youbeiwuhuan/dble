@@ -5,10 +5,11 @@
 */
 package com.actiontech.dble.net.mysql;
 
-import com.actiontech.dble.DbleServer;
 import com.actiontech.dble.backend.mysql.BufferUtil;
 import com.actiontech.dble.backend.mysql.MySQLMessage;
 import com.actiontech.dble.net.FrontendConnection;
+import com.actiontech.dble.singleton.BufferPoolManager;
+import com.actiontech.dble.singleton.SerializableLock;
 
 import java.nio.ByteBuffer;
 
@@ -68,7 +69,7 @@ public class ErrorPacket extends MySQLPacket {
 
     public byte[] toBytes() {
         int size = calcPacketSize();
-        ByteBuffer buffer = DbleServer.getInstance().getBufferPool().allocate(size + PACKET_HEADER_SIZE);
+        ByteBuffer buffer = BufferPoolManager.getBufferPool().allocate(size + PACKET_HEADER_SIZE);
         BufferUtil.writeUB3(buffer, size);
         buffer.put(packetId);
         buffer.put(fieldCount);
@@ -81,7 +82,7 @@ public class ErrorPacket extends MySQLPacket {
         buffer.flip();
         byte[] data = new byte[buffer.limit()];
         buffer.get(data);
-        DbleServer.getInstance().getBufferPool().recycle(buffer);
+        BufferPoolManager.getBufferPool().recycle(buffer);
         return data;
     }
 
@@ -105,6 +106,7 @@ public class ErrorPacket extends MySQLPacket {
 
 
     public void write(FrontendConnection c) {
+        SerializableLock.getInstance().unLock(c.getId());
         ByteBuffer buffer = c.allocate();
         buffer = this.write(buffer, c, true);
         c.write(buffer);

@@ -13,12 +13,15 @@ import com.actiontech.dble.config.model.SchemaConfig;
 import com.actiontech.dble.config.model.TableConfig;
 import com.actiontech.dble.plan.common.ptr.StringPtr;
 import com.actiontech.dble.route.RouteResultset;
+import com.actiontech.dble.route.RouteResultsetNode;
 import com.actiontech.dble.route.parser.druid.DruidParser;
 import com.actiontech.dble.route.parser.druid.DruidShardingParseInfo;
 import com.actiontech.dble.route.parser.druid.RouteCalculateUnit;
 import com.actiontech.dble.route.parser.druid.ServerSchemaStatVisitor;
 import com.actiontech.dble.route.util.RouterUtil;
 import com.actiontech.dble.server.ServerConnection;
+import com.actiontech.dble.singleton.CacheService;
+import com.actiontech.dble.singleton.ProxyMeta;
 import com.actiontech.dble.sqlengine.mpp.IsValue;
 import com.actiontech.dble.sqlengine.mpp.RangeValue;
 import com.actiontech.dble.util.StringUtil;
@@ -82,8 +85,9 @@ public class DefaultDruidParser implements DruidParser {
         if (visitor.getNotSupportMsg() != null) {
             throw new SQLNonTransientException(visitor.getNotSupportMsg());
         }
+        List<List<Condition>> conditions = visitor.getConditionList();
         Map<String, String> tableAliasMap = getTableAliasMap(visitor.getAliasMap());
-        ctx.setRouteCalculateUnits(this.buildRouteCalculateUnits(tableAliasMap, visitor.getConditionList()));
+        ctx.setRouteCalculateUnits(this.buildRouteCalculateUnits(tableAliasMap, conditions));
         return schema;
     }
 
@@ -91,18 +95,15 @@ public class DefaultDruidParser implements DruidParser {
         if (originTableAliasMap == null) {
             return null;
         }
-        Map<String, String> tableAliasMap = new HashMap<>();
-        tableAliasMap.putAll(originTableAliasMap);
-        for (Map.Entry<String, String> entry : originTableAliasMap.entrySet()) {
-            String key = entry.getKey();
-            String value = entry.getValue();
-            if (DbleServer.getInstance().getSystemVariables().isLowerCaseTableNames()) {
-                if (key != null) {
-                    key = key.toLowerCase();
-                }
-                if (value != null) {
-                    value = value.toLowerCase();
-                }
+        Map<String, String> tableAliasMap = new HashMap<>(originTableAliasMap);
+        Iterator<Map.Entry<String, String>> iterator = tableAliasMap.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<String, String> next = iterator.next();
+            String key = next.getKey();
+            String value = next.getValue();
+            if ("subquery".equalsIgnoreCase(value)) {
+                iterator.remove();
+                continue;
             }
             if (key != null) {
                 int pos = key.indexOf(".");
@@ -116,22 +117,16 @@ public class DefaultDruidParser implements DruidParser {
                     value = value.substring(pos + 1);
                 }
             }
-            if (key != null && key.charAt(0) == '`') {
-                key = key.substring(1, key.length() - 1);
-            }
-            if (value != null && value.charAt(0) == '`') {
-                value = value.substring(1, value.length() - 1);
-            }
-            // remove database in database.table
             if (key != null) {
+                key = StringUtil.removeBackQuote(key);
+                // remove database in database.table
                 boolean needAddTable = false;
                 if (key.equals(value)) {
                     needAddTable = true;
                 }
-                if (needAddTable) {
+                if (needAddTable && !ctx.getTables().contains(key)) {
                     ctx.addTable(key);
                 }
-                tableAliasMap.put(key, value);
             }
         }
         ctx.setTableAliasMap(tableAliasMap);
@@ -150,7 +145,7 @@ public class DefaultDruidParser implements DruidParser {
                 }
                 if (checkConditionValues(values)) {
                     String columnName = StringUtil.removeBackQuote(condition.getColumn().getName().toUpperCase());
-                    String tableName = StringUtil.removeBackQuote(condition.getColumn().getTable());
+                    String tableName = condition.getColumn().getTable();
                     if (DbleServer.getInstance().getSystemVariables().isLowerCaseTableNames()) {
                         tableName = tableName.toLowerCase();
                     }
@@ -197,7 +192,7 @@ public class DefaultDruidParser implements DruidParser {
 
     void checkTableExists(TableConfig tc, String schemaName, String tableName, ServerPrivileges.CheckType chekcType) throws SQLException {
         if (tc == null) {
-            if (DbleServer.getInstance().getTmManager().getSyncView(schemaName, tableName) != null) {
+            if (ProxyMeta.getInstance().getTmManager().getSyncView(schemaName, tableName) != null) {
                 String msg = "View '" + schemaName + "." + tableName + "' Not Support " + chekcType;
                 throw new SQLException(msg, "HY000", ErrorCode.ERR_NOT_SUPPORTED);
             }
@@ -205,7 +200,7 @@ public class DefaultDruidParser implements DruidParser {
             throw new SQLException(msg, "42S02", ErrorCode.ER_NO_SUCH_TABLE);
         } else {
             //it is strict
-            if (DbleServer.getInstance().getTmManager().getSyncTableMeta(schemaName, tableName) == null) {
+            if (ProxyMeta.getInstance().getTmManager().getSyncTableMeta(schemaName, tableName) == null) {
                 String msg = "Table meta '" + schemaName + "." + tableName + "' is lost,PLEASE reload @@metadata";
                 LOGGER.warn(msg);
                 throw new SQLException(msg, "HY000", ErrorCode.ERR_HANDLE_DATA);
@@ -238,5 +233,38 @@ public class DefaultDruidParser implements DruidParser {
         visitor.setShardingSupport(false);
         statement.accept(visitor);
         return buf.toString();
+    }
+
+
+    /**
+     * delete / update sharding table with limit route
+     * if the update/delete with limit route to more than one sharding-table throw a new Execption
+     *
+     * @param rrs
+     * @param tableName
+     * @param schema
+     * @throws SQLException
+     */
+    protected void updateAndDeleteLimitRoute(RouteResultset rrs, String tableName, SchemaConfig schema) throws SQLException {
+        SortedSet<RouteResultsetNode> nodeSet = new TreeSet<>();
+        for (RouteCalculateUnit unit : ctx.getRouteCalculateUnits()) {
+            RouteResultset rrsTmp = RouterUtil.tryRouteForOneTable(schema, unit, tableName, rrs, false,
+                    CacheService.getTableId2DataNodeCache(), null);
+            if (rrsTmp != null && rrsTmp.getNodes() != null) {
+                Collections.addAll(nodeSet, rrsTmp.getNodes());
+            }
+        }
+        if (nodeSet.size() > 1) {
+            throw new SQLNonTransientException("delete/update sharding table with a limit route to multiNode not support");
+        } else {
+            RouteResultsetNode[] nodes = new RouteResultsetNode[nodeSet.size()];
+            int i = 0;
+            for (RouteResultsetNode aNodeSet : nodeSet) {
+                nodes[i] = aNodeSet;
+                i++;
+            }
+            rrs.setNodes(nodes);
+            rrs.setFinishedRoute(true);
+        }
     }
 }

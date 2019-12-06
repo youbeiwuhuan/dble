@@ -6,7 +6,7 @@
 package com.actiontech.dble.manager.response;
 
 import com.actiontech.dble.DbleServer;
-import com.actiontech.dble.backend.datasource.PhysicalDBPool;
+import com.actiontech.dble.backend.datasource.AbstractPhysicalDBPool;
 import com.actiontech.dble.backend.datasource.PhysicalDatasource;
 import com.actiontech.dble.backend.mysql.PacketUtil;
 import com.actiontech.dble.cluster.*;
@@ -25,6 +25,7 @@ import com.actiontech.dble.net.mysql.ResultSetHeaderPacket;
 import com.actiontech.dble.net.mysql.RowDataPacket;
 import com.actiontech.dble.server.NonBlockingSession;
 import com.actiontech.dble.server.ServerConnection;
+import com.actiontech.dble.singleton.ClusterGeneralConfig;
 import com.actiontech.dble.sqlengine.OneRawSQLQueryResultHandler;
 import com.actiontech.dble.sqlengine.SQLJob;
 import com.actiontech.dble.sqlengine.SQLQueryResult;
@@ -80,11 +81,11 @@ public final class ShowBinlogStatus {
     private static volatile String errMsg = null;
 
     public static void execute(ManagerConnection c) {
-        boolean isUseZK = DbleServer.getInstance().isUseZK();
+        boolean isUseZK = ClusterGeneralConfig.isUseZK();
         long timeout = DbleServer.getInstance().getConfig().getSystem().getShowBinlogStatusTimeout();
         if (isUseZK) {
             showBinlogWithZK(c, timeout);
-        } else if (DbleServer.getInstance().isUseGeneralCluster()) {
+        } else if (ClusterGeneralConfig.isUseGeneralCluster()) {
             showBinlogWithUcore(c, timeout);
         } else {
             if (!DbleServer.getInstance().getBackupLocked().compareAndSet(false, true)) {
@@ -341,10 +342,10 @@ public final class ShowBinlogStatus {
      * @param charset
      */
     private static void getQueryResult(final String charset) {
-        Collection<PhysicalDBPool> allPools = DbleServer.getInstance().getConfig().getDataHosts().values();
+        Collection<AbstractPhysicalDBPool> allPools = DbleServer.getInstance().getConfig().getDataHosts().values();
         sourceCount = new AtomicInteger(allPools.size());
         rows = new CopyOnWriteArrayList<>();
-        for (PhysicalDBPool pool : allPools) {
+        for (AbstractPhysicalDBPool pool : allPools) {
             //if WRITE_RANDOM_NODE ,may the binlog is not ready.
             final PhysicalDatasource source = pool.getSource();
             OneRawSQLQueryResultHandler resultHandler = new OneRawSQLQueryResultHandler(FIELDS,

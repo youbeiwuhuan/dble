@@ -13,6 +13,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.UnsupportedEncodingException;
 import java.util.List;
 import java.util.Random;
+import java.util.Set;
 
 /**
  * @author mycat
@@ -492,6 +493,26 @@ public final class StringUtil {
         return str;
     }
 
+    public static boolean isAlias(String aliasName) {
+        if (aliasName.contains("`.") || aliasName.contains(".`") || aliasName.contains(".")) {
+            return false;
+        }
+        char firstValue = aliasName.charAt(0);
+        return (firstValue == '`') && (firstValue == aliasName.charAt(aliasName.length() - 1));
+    }
+
+    public static String removeAllApostrophe(String str) {
+        if (str.length() > 1) {
+            char firstValue = str.charAt(0);
+            if ((firstValue == '\'' | firstValue == '"') && (firstValue == str.charAt(str.length() - 1))) {
+                return str.substring(1, str.length() - 1);
+            } else {
+                return str;
+            }
+        }
+        return str;
+    }
+
     /**
      * remove ' from 'value'
      *
@@ -529,6 +550,15 @@ public final class StringUtil {
         }
 
         String[] arr = list.toArray(new String[list.size()]);
+        return join(arr, flag);
+    }
+
+    public static String join(Set<String> set, String flag) {
+        if (set.size() < 1) {
+            return "";
+        }
+
+        String[] arr = set.toArray(new String[set.size()]);
         return join(arr, flag);
     }
 

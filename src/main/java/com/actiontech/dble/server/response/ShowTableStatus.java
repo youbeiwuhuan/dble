@@ -10,6 +10,7 @@ import com.actiontech.dble.backend.mysql.PacketUtil;
 import com.actiontech.dble.config.ErrorCode;
 import com.actiontech.dble.config.Fields;
 import com.actiontech.dble.manager.handler.PackageBufINf;
+import com.actiontech.dble.singleton.ProxyMeta;
 import com.actiontech.dble.meta.SchemaMeta;
 import com.actiontech.dble.meta.protocol.StructureMeta;
 import com.actiontech.dble.net.mysql.EOFPacket;
@@ -32,7 +33,7 @@ public final class ShowTableStatus {
     private static final String SHOW_TABLE_STATUS = "^\\s*(/\\*[\\s\\S]*\\*/)?\\s*(show)" +
             "(\\s+table)" +
             "(\\s+status)" +
-            "(\\s+(from|in)\\s+(`?[a-zA-Z_0-9]+`?))?" +
+            "(\\s+(from|in)\\s+((`((?!`).)+`|[a-zA-Z_0-9]+)))?" +
             "((\\s+(like)\\s+'((. *)*)'\\s*)|(\\s+(where)\\s+((. *)*)\\s*))?" +
             "\\s*(/\\*[\\s\\S]*\\*/)?\\s*$";
     public static final Pattern PATTERN = Pattern.compile(SHOW_TABLE_STATUS, Pattern.CASE_INSENSITIVE);
@@ -50,7 +51,7 @@ public final class ShowTableStatus {
             schema = schema.toLowerCase();
         }
         String cSchema = schema == null ? c.getSchema() : schema;
-        String likeCondition = ma.group(11);
+        String likeCondition = ma.group(13);
         responseDirect(c, cSchema, likeCondition);
     }
 
@@ -60,7 +61,7 @@ public final class ShowTableStatus {
             c.writeErrMessage("3D000", "No database selected", ErrorCode.ER_NO_DB_ERROR);
             return;
         }
-        SchemaMeta schemata = DbleServer.getInstance().getTmManager().getCatalogs().get(cSchema);
+        SchemaMeta schemata = ProxyMeta.getInstance().getTmManager().getCatalogs().get(cSchema);
         if (schemata == null) {
             c.writeErrMessage("42000", "Unknown database " + cSchema, ErrorCode.ER_BAD_DB_ERROR);
             return;
@@ -135,7 +136,7 @@ public final class ShowTableStatus {
             row.add(StringUtil.encode("1970-01-01 00:00:00", c.getCharset().getResults()));
             row.add(StringUtil.encode("1970-01-01 00:00:00", c.getCharset().getResults()));
             row.add(StringUtil.encode("1970-01-01 00:00:00", c.getCharset().getResults()));
-            row.add(StringUtil.encode("utf8_general_ci", c.getCharset().getResults()));
+            row.add(StringUtil.encode("utf8mb4_general_ci", c.getCharset().getResults()));
             row.add(StringUtil.encode("", c.getCharset().getResults()));
             row.add(StringUtil.encode("", c.getCharset().getResults()));
             row.add(StringUtil.encode("", c.getCharset().getResults()));

@@ -8,38 +8,31 @@ package com.actiontech.dble.cluster.impl;
 import com.actiontech.dble.DbleServer;
 import com.actiontech.dble.alarm.UcoreGrpc;
 import com.actiontech.dble.alarm.UcoreInterface;
-import com.actiontech.dble.backend.mysql.view.CKVStoreRepository;
-import com.actiontech.dble.backend.mysql.view.FileSystemRepository;
-import com.actiontech.dble.backend.mysql.view.Repository;
 import com.actiontech.dble.cluster.AbstractClusterSender;
-import com.actiontech.dble.cluster.ClusterGeneralConfig;
+import com.actiontech.dble.singleton.ClusterGeneralConfig;
 import com.actiontech.dble.cluster.ClusterHelper;
 import com.actiontech.dble.cluster.ClusterParamCfg;
-import com.actiontech.dble.cluster.bean.KvBean;
 import com.actiontech.dble.cluster.bean.ClusterAlertBean;
+import com.actiontech.dble.cluster.bean.KvBean;
 import com.actiontech.dble.cluster.bean.SubscribeRequest;
 import com.actiontech.dble.cluster.bean.SubscribeReturnBean;
-import com.actiontech.dble.server.status.OnlineLockStatus;
-import org.apache.commons.lang.StringUtils;
 import com.google.common.base.Strings;
 import io.grpc.Channel;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
+import org.apache.commons.lang.StringUtils;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
 
-import static com.actiontech.dble.cluster.ClusterController.CONFIG_FILE_NAME;
-import static com.actiontech.dble.cluster.ClusterController.GENERAL_GRPC_TIMEOUT;
-import static com.actiontech.dble.cluster.ClusterController.GRPC_SUBTIMEOUT;
+import static com.actiontech.dble.cluster.ClusterController.*;
 
 
 /**
@@ -109,19 +102,29 @@ public final class UcoreSender extends AbstractClusterSender {
                             try {
                                 LOGGER.debug("renew lock of session  start:" + sessionId + " " + path);
                                 if ("".equals(ClusterHelper.getKV(path).getValue())) {
-                                    LOGGER.warn("renew lock of session  failure:" + sessionId + " " + path + ", the key is missing ");
+                                    log("renew lock of session  failure:" + sessionId + " " + path + ", the key is missing ", null);
                                     // alert
                                     Thread.currentThread().interrupt();
                                 } else if (!renewLock(sessionId)) {
-                                    LOGGER.warn("renew lock of session  failure:" + sessionId + " " + path);
+                                    log("renew lock of session  failure:" + sessionId + " " + path, null);
                                     // alert
                                 } else {
                                     LOGGER.debug("renew lock of session  success:" + sessionId + " " + path);
                                 }
                                 LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(10000));
                             } catch (Exception e) {
-                                LOGGER.warn("renew lock of session  failure:" + sessionId + " " + path, e);
+                                log("renew lock of session  failure:" + sessionId + " " + path, e);
                                 LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(5000));
+                            }
+                        }
+                    }
+
+                    private void log(String message, Exception e) {
+                        if (!Thread.currentThread().isInterrupted()) {
+                            if (e == null) {
+                                LOGGER.warn(message);
+                            } else {
+                                LOGGER.warn(message, e);
                             }
                         }
                     }
@@ -155,11 +158,11 @@ public final class UcoreSender extends AbstractClusterSender {
     public void unlockKey(String path, String sessionId) {
         UcoreInterface.UnlockOnSessionInput put = UcoreInterface.UnlockOnSessionInput.newBuilder().setKey(path).setSessionId(sessionId).build();
         try {
-            stub.withDeadlineAfter(GENERAL_GRPC_TIMEOUT, TimeUnit.SECONDS).unlockOnSession(put);
             Thread renewThread = lockMap.get(path);
             if (renewThread != null) {
                 renewThread.interrupt();
             }
+            stub.withDeadlineAfter(GENERAL_GRPC_TIMEOUT, TimeUnit.SECONDS).unlockOnSession(put);
         } catch (Exception e) {
             LOGGER.info(sessionId + " unlockKey " + path + " error ," + stub, e);
         }
@@ -217,8 +220,7 @@ public final class UcoreSender extends AbstractClusterSender {
             }
         }
 
-        KvBean bean = new KvBean(path, output.getValue(), 0);
-        return bean;
+        return new KvBean(path, output.getValue(), 0);
     }
 
     @Override
@@ -248,11 +250,10 @@ public final class UcoreSender extends AbstractClusterSender {
                     }
                 }
             }
-            if (output == null) {
-                throw new RuntimeException("ALL the ucore connect failure");
-            }
         }
-
+        if (output == null) {
+            throw new RuntimeException("ALL the ucore connect failure");
+        }
         for (int i = 0; i < output.getKeysCount(); i++) {
             KvBean bean = new KvBean(output.getKeys(i), output.getValues(i), output.getIndex());
             result.add(bean);
@@ -406,7 +407,7 @@ public final class UcoreSender extends AbstractClusterSender {
         UcoreInterface.AlertInput.Builder builder = UcoreInterface.AlertInput.newBuilder().
                 setCode(alert.getCode()).
                 setDesc(alert.getDesc()).
-                setLevel(alert.getLevel().toString()).
+                setLevel(alert.getLevel()).
                 setSourceComponentType(SOURCE_COMPONENT_TYPE).
                 setSourceComponentId(sourceComponentId).
                 setAlertComponentId(alert.getAlertComponentId()).
@@ -490,6 +491,7 @@ public final class UcoreSender extends AbstractClusterSender {
             File file = new File(DbleServer.class.getResource(CONFIG_FILE_NAME).getFile());
             out = new FileOutputStream(file);
             properties.store(out, "");
+            LOGGER.info("ips set to ucore success:" + ips);
         } catch (Exception e) {
             LOGGER.info("ips set to ucore failure");
         } finally {
@@ -519,22 +521,13 @@ public final class UcoreSender extends AbstractClusterSender {
                             for (int i = 0; i < output.getIpsList().size(); i++) {
                                 ips.add(output.getIps(i));
                             }
+                            LOGGER.info("old ucore ips :" + StringUtils.join(ipList, ','));
                             setIpList(ips);
-                            setIp(StringUtils.join(ips, ','));
+                            String strIPs = StringUtils.join(ips, ',');
+                            LOGGER.info("new ucore ips :" + strIPs);
+                            setIp(strIPs);
                         }
-
-                        if (DbleServer.getInstance().getTmManager() != null) {
-                            if (DbleServer.getInstance().getTmManager().getRepository() instanceof FileSystemRepository) {
-                                LOGGER.warn("Dble first reconnect to ucore ,local view repository change to CKVStoreRepository");
-                                Repository newViewRepository = new CKVStoreRepository();
-                                DbleServer.getInstance().getTmManager().setRepository(newViewRepository);
-                                Map<String, Map<String, String>> viewCreateSqlMap = newViewRepository.getViewCreateSqlMap();
-                                DbleServer.getInstance().getTmManager().reloadViewMeta(viewCreateSqlMap);
-                                //init online status
-                                LOGGER.warn("Dble first reconnect to ucore ,online status rebuild");
-                                OnlineLockStatus.getInstance().metaUcoreInit(true);
-                            }
-                        }
+                        firstReturnToCluster();
                     } catch (Exception e) {
                         LOGGER.warn("error in ucore nodes watch,try for another time", e);
                     }

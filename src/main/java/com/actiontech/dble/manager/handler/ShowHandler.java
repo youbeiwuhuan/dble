@@ -7,7 +7,7 @@ package com.actiontech.dble.manager.handler;
 
 import com.actiontech.dble.DbleServer;
 import com.actiontech.dble.alarm.AlertUtil;
-import com.actiontech.dble.backend.datasource.PhysicalDBPool;
+import com.actiontech.dble.backend.datasource.AbstractPhysicalDBPool;
 import com.actiontech.dble.backend.datasource.PhysicalDatasource;
 import com.actiontech.dble.config.ErrorCode;
 import com.actiontech.dble.manager.ManagerConnection;
@@ -98,6 +98,9 @@ public final class ShowHandler {
             case ManagerParseShow.HELP:
                 ShowHelp.execute(c);
                 break;
+            case ManagerParseShow.SHOW_RELOAD:
+                ShowReloadStatus.execute(c);
+                break;
             case ManagerParseShow.HEARTBEAT:
                 ShowHeartbeat.response(c);
                 break;
@@ -176,11 +179,8 @@ public final class ShowHandler {
             case ManagerParseShow.DATASOURCE_CLUSTER://by songwie
                 ShowDatasourceCluster.response(c);
                 break;
-            case ManagerParseShow.DIRECTMEMORY_DETAIL:
-                ShowDirectMemory.execute(c, 2);
-                break;
-            case ManagerParseShow.DIRECTMEMORY_TOTAL:
-                ShowDirectMemory.execute(c, 1);
+            case ManagerParseShow.DIRECTMEMORY:
+                ShowDirectMemory.execute(c);
                 break;
             case ManagerParseShow.CONNECTION_COUNT:
                 ShowConnectionCount.execute(c);
@@ -223,11 +223,17 @@ public final class ShowHandler {
             case ManagerParseShow.DDL_STATE:
                 ShowDdlState.execute(c);
                 break;
+            case ManagerParseShow.SHOW_USER:
+                ShowUser.execute(c);
+                break;
+            case ManagerParseShow.SHOW_USER_PRIVILEGE:
+                ShowUserPrivilege.execute(c);
+                break;
             default:
                 if (isSupportShow(stmt)) {
-                    Iterator<PhysicalDBPool> iterator = DbleServer.getInstance().getConfig().getDataHosts().values().iterator();
+                    Iterator<AbstractPhysicalDBPool> iterator = DbleServer.getInstance().getConfig().getDataHosts().values().iterator();
                     if (iterator.hasNext()) {
-                        PhysicalDBPool pool = iterator.next();
+                        AbstractPhysicalDBPool pool = iterator.next();
                         final PhysicalDatasource source = pool.getSource();
                         TransformSQLJob sqlJob = new TransformSQLJob(stmt, null, source, c);
                         sqlJob.run();

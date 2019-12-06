@@ -13,11 +13,11 @@
 	License for the specific language governing permissions and - limitations 
 	under the License. -->
 <!DOCTYPE dble:server SYSTEM "server.dtd">
-<dble:server xmlns:dble="http://dble.cloud/" version="2.19.03.0">
+<dble:server xmlns:dble="http://dble.cloud/" version="1.0">
     <system>
         <!-- base config -->
         <!--<property name="bindIp">0.0.0.0</property>-->
-        <!-- property name="serverPort">8066</property> -->
+        <!--<property name="serverPort">8066</property> -->
         <!--<property name="managerPort">9066</property> -->
         <!--<property name="maxCon">0</property> -->
         <!--<property name="processors">4</property>-->
@@ -47,8 +47,8 @@
         <!--<property name="costSamplePercent">1</property>-->
 
         <!--connection -->
-        <!--<property name="charset">utf8</property>-->
-        <!--<property name="maxPacketSize">16777216</property>-->
+        <!--<property name="charset">utf8mb4</property>-->
+        <!--<property name="maxPacketSize">4194304</property>-->
         <!--<property name="txIsolation">3</property>-->
 
         <!--consistency-->
@@ -102,7 +102,7 @@
 
         <!-- off Heap unit:bytes-->
         <property name="bufferPoolChunkSize">4096</property>
-        <property name="bufferPoolPageNumber">512</property>
+        <property name="bufferPoolPageNumber">256</property>
         <property name="bufferPoolPageSize">2097152</property>
         <!--<property name="mappedFileSize">2097152</property>-->
 
@@ -146,6 +146,8 @@
         <!-- used for load data, because dble need save to disk if loading file contains large size -->
         <!--<property name="maxRowSizeToFile">10000</property>-->
 
+        <!-- used for outerHa ,when the value is true ,one dataHost can only has one writeHost,and dataHost commands would be available-->
+        <!--<property name="useOuterHa">true</property>-->
 
     </system>
 

@@ -12,33 +12,18 @@ import java.util.Map;
 
 public final class SystemVariables {
 
-    private Map<String, SystemGlobalVariable> globalVariables;
+    private Map<String, String> globalVariables;
     private Map<String, String> sessionVariables;
+    private volatile boolean lowerCase = false;
 
     public SystemVariables() {
         globalVariables = new HashMap<>();
-        pickGlobalVariables();
         sessionVariables = new HashMap<>();
         pickSessionVariables();
     }
 
-    private void pickGlobalVariables() {
-        globalVariables.put("lower_case_table_names", new SystemGlobalVariable() {
-            String value = "0";
-
-            public void setVariable(String value, SystemVariables sys) throws RuntimeException {
-                this.value = value;
-            }
-
-            public String getVariable() {
-                return value;
-            }
-        });
-    }
-
     public boolean isLowerCaseTableNames() {
-        Integer value = Integer.valueOf(globalVariables.get("lower_case_table_names").getVariable());
-        return value != 0;
+        return lowerCase;
     }
 
     private void pickSessionVariables() {
@@ -57,15 +42,15 @@ public final class SystemVariables {
         sessionVariables.put("binlogging_impossible_mode", "IGNORE_ERROR");
         sessionVariables.put("block_encryption_mode", "aes-128-ecb");
         sessionVariables.put("bulk_insert_buffer_size", "8388608");
-        sessionVariables.put("character_set_client", "utf8");
-        sessionVariables.put("character_set_connection", "utf8");
-        sessionVariables.put("character_set_database", "utf8");
+        sessionVariables.put("character_set_client", "utf8mb4");
+        sessionVariables.put("character_set_connection", "utf8mb4");
+        sessionVariables.put("character_set_database", "utf8mb4");
         sessionVariables.put("character_set_filesystem", "binary");
-        sessionVariables.put("character_set_results", "utf8");
-        sessionVariables.put("character_set_server", "utf8");
-        sessionVariables.put("collation_connection", "utf8_general_ci");
-        sessionVariables.put("collation_database", "utf8_general_ci");
-        sessionVariables.put("collation_server", "utf8_general_ci");
+        sessionVariables.put("character_set_results", "utf8mb4");
+        sessionVariables.put("character_set_server", "utf8mb4");
+        sessionVariables.put("collation_connection", "utf8mb4_general_ci");
+        sessionVariables.put("collation_database", "utf8mb4_general_ci");
+        sessionVariables.put("collation_server", "utf8mb4_general_ci");
         sessionVariables.put("completion_type", "NO_CHAIN");
         sessionVariables.put("debug", "d:t:i:o,/tmp/mysqld.trace");
         sessionVariables.put("debug_sync", "0");
@@ -224,20 +209,10 @@ public final class SystemVariables {
         String key = variable.toLowerCase();
         if (sessionVariables.containsKey(key)) {
             sessionVariables.put(key, value);
+        } else if ("lower_case_table_names".equals(key)) {
+            lowerCase = !value.equals("0");
         } else {
-            SystemGlobalVariable gv = globalVariables.get(key);
-            if (gv != null) {
-                gv.setVariable(value, this);
-            }
-        }
-    }
-
-    public String getGlobalVarValue(String variable) {
-        SystemGlobalVariable gv = globalVariables.get(variable.toLowerCase());
-        if (gv != null) {
-            return gv.getVariable();
-        } else {
-            return null;
+            globalVariables.put(key, value);
         }
     }
 

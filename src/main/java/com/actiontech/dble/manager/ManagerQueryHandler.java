@@ -80,7 +80,7 @@ public class ManagerQueryHandler implements FrontendQueryHandler {
                 StopHandler.handle(sql, c, rs >>> SHIFT);
                 break;
             case ManagerParse.DRY_RUN:
-                DryRun.execute(c, sql);
+                DryRun.execute(c);
                 break;
             case ManagerParse.RELOAD:
                 ReloadHandler.handle(sql, c, rs >>> SHIFT);
@@ -105,6 +105,16 @@ public class ManagerQueryHandler implements FrontendQueryHandler {
                 break;
             case ManagerParse.CHECK:
                 CheckHandler.handle(sql, c, rs >>> SHIFT);
+                break;
+            case ManagerParse.RELEASE_RELOAD_METADATA:
+                ReleaseReloadMetadata.execute(c);
+                break;
+            case ManagerParse.DATAHOST:
+                DataHostHandler.handle(sql, c);
+                break;
+            case ManagerParse.SPLIT:
+                c.skipIdleCheck(true);
+                SplitDumpHandler.handle(sql, c, rs >>> SHIFT);
                 break;
             default:
                 c.writeErrMessage(ErrorCode.ER_YES, "Unsupported statement");

@@ -343,21 +343,28 @@ public final class ParseUtil {
      * @param offset
      * @return
      */
-    public static boolean commentDoubleDash(String stmt, int offset) {
+    public static int commentDoubleDash(String stmt, int offset) {
         int len = stmt.length();
-        int n = offset;
-        switch (stmt.charAt(n)) {
-            case '-':
-                if (len > ++n && stmt.charAt(n) == '-' && len > ++n) {
-                    if (isSpace(stmt.charAt(n))) {
-                        return true;
+        boolean inComment = false;
+        while (len > offset) {
+            char c = stmt.charAt(offset);
+            if (!inComment && c == '-') {
+                if (len > ++offset && stmt.charAt(offset) == '-') {
+                    if (len == offset + 1 || (stmt.charAt(++offset) != ' ' &&
+                            stmt.charAt(offset) != '\t')) {
+                        break;
                     }
+                    inComment = true;
+                } else {
+                    return len;
                 }
+            } else if (c == '\n' || len == offset + 1) {
                 break;
-            default:
-                break;
+            } else {
+                ++offset;
+            }
         }
-        return false;
+        return offset;
     }
 
     public static boolean currentCharIsSep(String stmt, int offset) {
@@ -452,6 +459,12 @@ public final class ParseUtil {
                         i = getProcedureEndPos(sql, i);
                     }
                     break;
+                case 'F':
+                case 'f':
+                    if (!inApostrophe) {
+                        i = getFinctionEndPos(sql, i);
+                    }
+                    break;
                 case 'B':
                     if (inProcedure && !inApostrophe && isBegin(sql, i)) {
                         procedureBegin = true;
@@ -506,16 +519,42 @@ public final class ParseUtil {
         return false;
     }
 
+    private static int getFinctionEndPos(String stmt, int offset) {
+        int toffset = offset;
+        if (stmt.length() > offset + "UNCTION ".length()) {
+            char c1 = stmt.charAt(++toffset);
+            char c2 = stmt.charAt(++toffset);
+            char c3 = stmt.charAt(++toffset);
+            char c4 = stmt.charAt(++toffset);
+            char c5 = stmt.charAt(++toffset);
+            char c6 = stmt.charAt(++toffset);
+            char c7 = stmt.charAt(++toffset);
+            if ((c1 == 'u' || c1 == 'U') &&
+                    (c2 == 'n' || c2 == 'N') &&
+                    (c3 == 'c' || c3 == 'C') &&
+                    (c4 == 't' || c4 == 'T') &&
+                    (c5 == 'i' || c5 == 'I') &&
+                    (c6 == 'o' || c6 == 'O') &&
+                    (c7 == 'n' || c7 == 'N')) {
+                String testSql = stmt.substring(++toffset).toUpperCase();
+                //offset + length  -1 for checking ';' outside
+                return toffset - 1 + findNextBreak(testSql, true);
+            }
+        }
+        return offset;
+    }
+
     private static int getProcedureEndPos(String stmt, int offset) {
+        int toffset = offset;
         if (stmt.length() > offset + "ROCEDURE ".length()) {
-            char c1 = stmt.charAt(++offset);
-            char c2 = stmt.charAt(++offset);
-            char c3 = stmt.charAt(++offset);
-            char c4 = stmt.charAt(++offset);
-            char c5 = stmt.charAt(++offset);
-            char c6 = stmt.charAt(++offset);
-            char c7 = stmt.charAt(++offset);
-            char c8 = stmt.charAt(++offset);
+            char c1 = stmt.charAt(++toffset);
+            char c2 = stmt.charAt(++toffset);
+            char c3 = stmt.charAt(++toffset);
+            char c4 = stmt.charAt(++toffset);
+            char c5 = stmt.charAt(++toffset);
+            char c6 = stmt.charAt(++toffset);
+            char c7 = stmt.charAt(++toffset);
+            char c8 = stmt.charAt(++toffset);
             if ((c1 == 'r' || c1 == 'R') &&
                     (c2 == 'o' || c2 == 'O') &&
                     (c3 == 'c' || c3 == 'C') &&
@@ -524,11 +563,21 @@ public final class ParseUtil {
                     (c6 == 'u' || c6 == 'U') &&
                     (c7 == 'r' || c7 == 'R') &&
                     (c8 == 'e' || c8 == 'E')) {
-                String testSql = stmt.substring(++offset).toUpperCase();
+                String testSql = stmt.substring(++toffset).toUpperCase();
                 //offset + length  -1 for checking ';' outside
-                return offset - 1 + findNextBreak(testSql, true);
+                return toffset - 1 + findNextBreak(testSql, true);
             }
         }
         return offset;
     }
+
+    public static int skipSpace(String stmt, int offset) {
+        do {
+            if (isSpace(stmt.charAt(offset)))
+                continue;
+            break;
+        } while (stmt.length() > ++offset);
+        return offset;
+    }
+
 }

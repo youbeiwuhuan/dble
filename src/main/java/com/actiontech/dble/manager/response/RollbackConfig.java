@@ -6,21 +6,25 @@
 package com.actiontech.dble.manager.response;
 
 import com.actiontech.dble.DbleServer;
+import com.actiontech.dble.backend.datasource.AbstractPhysicalDBPool;
 import com.actiontech.dble.backend.datasource.PhysicalDBNode;
-import com.actiontech.dble.backend.datasource.PhysicalDBPool;
 import com.actiontech.dble.btrace.provider.ClusterDelayProvider;
 import com.actiontech.dble.cluster.*;
 import com.actiontech.dble.config.ErrorCode;
 import com.actiontech.dble.config.ServerConfig;
 import com.actiontech.dble.config.loader.zkprocess.comm.ZkConfig;
 import com.actiontech.dble.config.loader.zkprocess.xmltozk.XmltoZkMain;
+import com.actiontech.dble.config.loader.zkprocess.zktoxml.listen.ConfigStatusListener;
 import com.actiontech.dble.config.loader.zkprocess.zookeeper.process.ConfStatus;
 import com.actiontech.dble.config.model.ERTable;
 import com.actiontech.dble.config.model.FirewallConfig;
 import com.actiontech.dble.config.model.SchemaConfig;
 import com.actiontech.dble.config.model.UserConfig;
 import com.actiontech.dble.manager.ManagerConnection;
+import com.actiontech.dble.meta.ReloadLogHelper;
+import com.actiontech.dble.meta.ReloadManager;
 import com.actiontech.dble.net.mysql.OkPacket;
+import com.actiontech.dble.singleton.ClusterGeneralConfig;
 import com.actiontech.dble.util.KVPathUtil;
 import com.actiontech.dble.util.ZKUtils;
 import org.apache.curator.framework.CuratorFramework;
@@ -29,14 +33,16 @@ import org.apache.curator.utils.ZKPaths;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static com.actiontech.dble.cluster.ClusterPathUtil.SEPARATOR;
+import static com.actiontech.dble.meta.ReloadStatus.TRIGGER_TYPE_COMMAND;
 
 
 /**
@@ -49,7 +55,7 @@ public final class RollbackConfig {
     private static final Logger LOGGER = LoggerFactory.getLogger(RollbackConfig.class);
 
     public static void execute(ManagerConnection c) {
-        if (DbleServer.getInstance().isUseZK()) {
+        if (ClusterGeneralConfig.isUseZK()) {
             CuratorFramework zkConn = ZKUtils.getConnection();
             InterProcessMutex distributeLock = new InterProcessMutex(zkConn, KVPathUtil.getConfChangeLockPath());
             try {
@@ -67,7 +73,7 @@ public final class RollbackConfig {
                 LOGGER.info("reload config failure", e);
                 writeErrorResult(c, e.getMessage() == null ? e.toString() : e.getMessage());
             }
-        } else if (DbleServer.getInstance().isUseGeneralCluster()) {
+        } else if (ClusterGeneralConfig.isUseGeneralCluster()) {
             DistributeLock distributeLock = new DistributeLock(ClusterPathUtil.getConfChangeLockPath(),
                     ClusterGeneralConfig.getInstance().getValue(ClusterParamCfg.CLUSTER_CFG_MYID));
             try {
@@ -79,7 +85,6 @@ public final class RollbackConfig {
                 ClusterDelayProvider.delayAfterReloadLock();
                 try {
                     rollbackWithUcore(c);
-                    writeOKResult(c);
                 } finally {
                     distributeLock.release();
                 }
@@ -88,27 +93,36 @@ public final class RollbackConfig {
                 writeErrorResult(c, e.getMessage() == null ? e.toString() : e.getMessage());
             }
         } else {
-            final ReentrantLock lock = DbleServer.getInstance().getConfig().getLock();
-            lock.lock();
+            final ReentrantReadWriteLock lock = DbleServer.getInstance().getConfig().getLock();
+            lock.writeLock().lock();
             try {
-                rollback();
-                writeOKResult(c);
+                if (!rollback(TRIGGER_TYPE_COMMAND)) {
+                    writeSpecialError(c, "Rollback interruputed by others,config should be reload");
+                } else {
+                    writeOKResult(c);
+                }
             } catch (Exception e) {
                 writeErrorResult(c, e.getMessage() == null ? e.toString() : e.getMessage());
             } finally {
-                lock.unlock();
+                lock.writeLock().unlock();
             }
         }
+        ReloadManager.reloadFinish();
     }
 
 
     private static void rollbackWithUcore(ManagerConnection c) {
         //step 1 lock the local meta ,than all the query depends on meta will be hanging
-        final ReentrantLock lock = DbleServer.getInstance().getConfig().getLock();
-        lock.lock();
+        final ReentrantReadWriteLock lock = DbleServer.getInstance().getConfig().getLock();
+        lock.writeLock().lock();
         try {
             // step 2 rollback self config
-            rollback();
+            if (!rollback(TRIGGER_TYPE_COMMAND)) {
+                writeSpecialError(c, "Rollback interruputed by others,config should be reload");
+                return;
+            }
+
+            ReloadManager.waitingOthers();
             ClusterDelayProvider.delayAfterMasterRollback();
 
             //step 3 tail the ucore & notify the other dble
@@ -126,52 +140,68 @@ public final class RollbackConfig {
             ClusterHelper.cleanPath(ClusterPathUtil.getConfStatusPath());
 
             if (errorMsg != null) {
-                throw new RuntimeException(errorMsg);
+                writeErrorResultForCluster(c, errorMsg);
+            } else {
+                writeOKResult(c);
             }
         } catch (Exception e) {
             LOGGER.warn("reload config failure", e);
             writeErrorResult(c, e.getMessage() == null ? e.toString() : e.getMessage());
         } finally {
-            lock.unlock();
+            lock.writeLock().unlock();
         }
     }
 
 
-    /**
-     * start the rollback when the zk is in using
-     *
-     * @param zkConn
-     * @param c
-     */
     private static void rollbackWithZk(CuratorFramework zkConn, ManagerConnection c) {
-        final ReentrantLock lock = DbleServer.getInstance().getConfig().getLock();
-        lock.lock();
+        final ReentrantReadWriteLock lock = DbleServer.getInstance().getConfig().getLock();
+        lock.writeLock().lock();
         try {
-            rollback();
+            if (!rollback(TRIGGER_TYPE_COMMAND)) {
+                writeSpecialError(c, "Rollback interruputed by others,config should be reload");
+                return;
+            }
+
+            ReloadManager.waitingOthers();
             ClusterDelayProvider.delayAfterMasterRollback();
 
             XmltoZkMain.rollbackConf();
             //tell zk this instance has prepared
-            ZKUtils.createTempNode(KVPathUtil.getConfStatusPath(), ZkConfig.getInstance().getValue(ClusterParamCfg.CLUSTER_CFG_MYID));
+            ZKUtils.createTempNode(KVPathUtil.getConfStatusPath(), ZkConfig.getInstance().getValue(ClusterParamCfg.CLUSTER_CFG_MYID),
+                    ConfigStatusListener.SUCCESS.getBytes(StandardCharsets.UTF_8));
             //check all session waiting status
             List<String> preparedList = zkConn.getChildren().forPath(KVPathUtil.getConfStatusPath());
             List<String> onlineList = zkConn.getChildren().forPath(KVPathUtil.getOnlinePath());
-            // TODO: While waiting, a new instance of MyCat is upping and working.
+
             while (preparedList.size() < onlineList.size()) {
                 LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(50));
                 onlineList = zkConn.getChildren().forPath(KVPathUtil.getOnlinePath());
                 preparedList = zkConn.getChildren().forPath(KVPathUtil.getConfStatusPath());
             }
-            ClusterDelayProvider.delayBeforeDeleterollbackLock();
+            ReloadLogHelper.info("rollback config: all instances finished ", LOGGER);
+            ClusterDelayProvider.delayBeforeDeleteReloadLock();
+            StringBuilder sbErrorInfo = new StringBuilder();
             for (String child : preparedList) {
+                String childPath = ZKPaths.makePath(KVPathUtil.getConfStatusPath(), child);
+                byte[] errorInfo = zkConn.getData().forPath(childPath);
+                if (!ConfigStatusListener.SUCCESS.equals(new String(errorInfo, StandardCharsets.UTF_8))) {
+                    sbErrorInfo.append(child).append(":");
+                    sbErrorInfo.append(new String(errorInfo, StandardCharsets.UTF_8));
+                    sbErrorInfo.append(";");
+                }
                 zkConn.delete().forPath(ZKPaths.makePath(KVPathUtil.getConfStatusPath(), child));
             }
-            writeOKResult(c);
+
+            if (sbErrorInfo.length() == 0) {
+                writeOKResult(c);
+            } else {
+                writeErrorResultForCluster(c, sbErrorInfo.toString());
+            }
         } catch (Exception e) {
-            LOGGER.info("reload config failure", e);
+            LOGGER.info("rollback config failure", e);
             writeErrorResult(c, e.getMessage() == null ? e.toString() : e.getMessage());
         } finally {
-            lock.unlock();
+            lock.writeLock().unlock();
         }
     }
 
@@ -192,21 +222,39 @@ public final class RollbackConfig {
         c.writeErrMessage(ErrorCode.ER_YES, sb);
     }
 
-    public static void rollback() throws Exception {
+    private static void writeSpecialError(ManagerConnection c, String errorMsg) {
+        String sb = "Reload config failure.The reason is " + errorMsg;
+        LOGGER.warn(sb);
+        c.writeErrMessage(ErrorCode.ER_RELOAD_INTERRUPUTED, sb);
+    }
+
+
+    private static void writeErrorResultForCluster(ManagerConnection c, String errorMsg) {
+        String sb = "Reload config failed partially. The node(s) failed because of:[" + errorMsg + "]";
+        LOGGER.warn(sb);
+        if (errorMsg.contains("interrupt by command")) {
+            c.writeErrMessage(ErrorCode.ER_RELOAD_INTERRUPUTED, sb);
+        } else {
+            c.writeErrMessage(ErrorCode.ER_CLUSTER_RELOAD, sb);
+        }
+    }
+
+    public static boolean rollback(String reloadType) throws Exception {
+        if (!ReloadManager.startReload(reloadType, ConfStatus.Status.ROLLBACK)) {
+            throw new Exception("Reload status error ,other client or cluster may in reload");
+        }
         ServerConfig conf = DbleServer.getInstance().getConfig();
-        Map<String, PhysicalDBPool> dataHosts = conf.getBackupDataHosts();
+        Map<String, AbstractPhysicalDBPool> dataHosts = conf.getBackupDataHosts();
         Map<String, UserConfig> users = conf.getBackupUsers();
         Map<String, SchemaConfig> schemas = conf.getBackupSchemas();
         Map<String, PhysicalDBNode> dataNodes = conf.getBackupDataNodes();
         FirewallConfig firewall = conf.getBackupFirewall();
         Map<ERTable, Set<ERTable>> erRelations = conf.getBackupErRelations();
         boolean backDataHostWithoutWR = conf.backDataHostWithoutWR();
-        if (conf.canRollback()) {
-            conf.rollback(users, schemas, dataNodes, dataHosts, erRelations, firewall, backDataHostWithoutWR);
-        } else if (conf.canRollbackAll()) {
+        if (conf.canRollbackAll()) {
             boolean rollbackStatus = true;
             String errorMsg = null;
-            for (PhysicalDBPool dn : dataHosts.values()) {
+            for (AbstractPhysicalDBPool dn : dataHosts.values()) {
                 dn.init(dn.getActiveIndex());
                 if (!dn.isInitSuccess()) {
                     rollbackStatus = false;
@@ -216,21 +264,21 @@ public final class RollbackConfig {
             }
             // INIT FAILED
             if (!rollbackStatus) {
-                for (PhysicalDBPool dn : dataHosts.values()) {
+                for (AbstractPhysicalDBPool dn : dataHosts.values()) {
                     dn.clearDataSources("rollbackup config");
                     dn.stopHeartbeat();
                 }
                 throw new Exception(errorMsg);
             }
-            final Map<String, PhysicalDBPool> cNodes = conf.getDataHosts();
+            final Map<String, AbstractPhysicalDBPool> cNodes = conf.getDataHosts();
             // apply
-            conf.rollback(users, schemas, dataNodes, dataHosts, erRelations, firewall, backDataHostWithoutWR);
+            boolean result = conf.rollback(users, schemas, dataNodes, dataHosts, erRelations, firewall, backDataHostWithoutWR);
             // stop old resource heartbeat
-            for (PhysicalDBPool dn : cNodes.values()) {
+            for (AbstractPhysicalDBPool dn : cNodes.values()) {
                 dn.clearDataSources("clear old config ");
                 dn.stopHeartbeat();
             }
-
+            return result;
         } else {
             throw new Exception("there is no old version");
         }

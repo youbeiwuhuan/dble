@@ -3,6 +3,7 @@ package com.actiontech.dble.cluster.impl.ushard;
 import com.actiontech.dble.cluster.AbstractClusterSender;
 import com.actiontech.dble.cluster.ClusterHelper;
 import com.actiontech.dble.cluster.ClusterParamCfg;
+import com.actiontech.dble.cluster.ClusterPathUtil;
 import com.actiontech.dble.cluster.bean.ClusterAlertBean;
 import com.actiontech.dble.cluster.bean.KvBean;
 import com.actiontech.dble.cluster.bean.SubscribeRequest;
@@ -52,6 +53,7 @@ public class UshardSender extends AbstractClusterSender {
         Channel channel = ManagedChannelBuilder.forAddress("127.0.0.1",
                 Integer.parseInt(getValue(ClusterParamCfg.CLUSTER_PLUGINS_PORT))).usePlaintext(true).build();
         stub = DbleClusterGrpc.newBlockingStub(channel).withDeadlineAfter(GENERAL_GRPC_TIMEOUT, TimeUnit.SECONDS);
+        startUpdateNodes();
     }
 
     @Override
@@ -71,19 +73,29 @@ public class UshardSender extends AbstractClusterSender {
                             try {
                                 LOGGER.debug("renew lock of session  start:" + sessionId + " " + path);
                                 if ("".equals(ClusterHelper.getKV(path).getValue())) {
-                                    LOGGER.warn("renew lock of session  failure:" + sessionId + " " + path + ", the key is missing ");
+                                    log("renew lock of session  failure:" + sessionId + " " + path + ", the key is missing ", null);
                                     // alert
                                     Thread.currentThread().interrupt();
                                 } else if (!renewLock(sessionId)) {
-                                    LOGGER.warn("renew lock of session  failure:" + sessionId + " " + path);
+                                    log("renew lock of session  failure:" + sessionId + " " + path, null);
                                     // alert
                                 } else {
                                     LOGGER.debug("renew lock of session  success:" + sessionId + " " + path);
                                 }
                                 LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(10000));
                             } catch (Exception e) {
-                                LOGGER.warn("renew lock of session  failure:" + sessionId + " " + path, e);
+                                log("renew lock of session  failure:" + sessionId + " " + path, e);
                                 LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(5000));
+                            }
+                        }
+                    }
+
+                    private void log(String message, Exception e) {
+                        if (!Thread.currentThread().isInterrupted()) {
+                            if (e == null) {
+                                LOGGER.warn(message);
+                            } else {
+                                LOGGER.warn(message, e);
                             }
                         }
                     }
@@ -102,11 +114,11 @@ public class UshardSender extends AbstractClusterSender {
     public void unlockKey(String path, String sessionId) {
         UshardInterface.UnlockOnSessionInput put = UshardInterface.UnlockOnSessionInput.newBuilder().setKey(path).setSessionId(sessionId).build();
         try {
-            stub.withDeadlineAfter(GENERAL_GRPC_TIMEOUT, TimeUnit.SECONDS).unlockOnSession(put);
             Thread renewThread = lockMap.get(path);
             if (renewThread != null) {
                 renewThread.interrupt();
             }
+            stub.withDeadlineAfter(GENERAL_GRPC_TIMEOUT, TimeUnit.SECONDS).unlockOnSession(put);
         } catch (Exception e) {
             LOGGER.info(sessionId + " unlockKey " + path + " error ," + stub, e);
         }
@@ -125,7 +137,7 @@ public class UshardSender extends AbstractClusterSender {
     @Override
     public KvBean getKV(String path) {
         UshardInterface.GetKvInput input = UshardInterface.GetKvInput.newBuilder().setKey(path).build();
-        UshardInterface.GetKvOutput output = null;
+        UshardInterface.GetKvOutput output;
 
         try {
             output = stub.withDeadlineAfter(GENERAL_GRPC_TIMEOUT, TimeUnit.SECONDS).getKv(input);
@@ -141,17 +153,15 @@ public class UshardSender extends AbstractClusterSender {
         if (!(path.charAt(path.length() - 1) == '/')) {
             path = path + "/";
         }
-        List<KvBean> result = new ArrayList<KvBean>();
+        List<KvBean> result = new ArrayList<>();
         UshardInterface.GetKvTreeInput input = UshardInterface.GetKvTreeInput.newBuilder().setKey(path).build();
 
-        UshardInterface.GetKvTreeOutput output = null;
+        UshardInterface.GetKvTreeOutput output;
 
         try {
             output = stub.withDeadlineAfter(GENERAL_GRPC_TIMEOUT, TimeUnit.SECONDS).getKvTree(input);
         } catch (Exception e1) {
-            if (output == null) {
-                throw new RuntimeException("ALL the ucore connect failure");
-            }
+            throw new RuntimeException("ALL the ucore connect failure");
         }
 
         for (int i = 0; i < output.getKeysCount(); i++) {
@@ -235,7 +245,7 @@ public class UshardSender extends AbstractClusterSender {
     }
 
 
-    public boolean renewLock(String sessionId) throws Exception {
+    private boolean renewLock(String sessionId) throws Exception {
         UshardInterface.RenewSessionInput input = UshardInterface.RenewSessionInput.newBuilder().setSessionId(sessionId).build();
         try {
             stub.withDeadlineAfter(GENERAL_GRPC_TIMEOUT, TimeUnit.SECONDS).renewSession(input);
@@ -246,10 +256,10 @@ public class UshardSender extends AbstractClusterSender {
         }
     }
 
-    public SubscribeReturnBean groupSubscribeResult(UshardInterface.SubscribeKvPrefixOutput output) {
+    private SubscribeReturnBean groupSubscribeResult(UshardInterface.SubscribeKvPrefixOutput output) {
         SubscribeReturnBean result = new SubscribeReturnBean();
         result.setIndex(output.getIndex());
-        if (output != null && output.getKeysCount() > 0) {
+        if (output.getKeysCount() > 0) {
             List<KvBean> kvList = new ArrayList<>();
             for (int i = 0; i < output.getKeysCount(); i++) {
                 kvList.add(new KvBean(output.getKeys(i), output.getValues(i), 0));
@@ -275,5 +285,30 @@ public class UshardSender extends AbstractClusterSender {
             builder.putAllLabels(alert.getLabels());
         }
         return builder.build();
+    }
+
+
+    private void startUpdateNodes() {
+        Thread nodes = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                for (; ; ) {
+                    try {
+                        UshardInterface.SubscribeKvPrefixInput input = UshardInterface.SubscribeKvPrefixInput.newBuilder().
+                                setIndex(0).setDuration(60).setKeyPrefix(ClusterPathUtil.BASE_PATH).build();
+                        stub.withDeadlineAfter(GRPC_SUBTIMEOUT, TimeUnit.SECONDS).subscribeKvPrefix(input);
+                        firstReturnToCluster();
+                        return;
+                    } catch (Exception e) {
+                        LOGGER.warn("error in ucore nodes watch,try for another time", e);
+                        Channel channel = ManagedChannelBuilder.forAddress("127.0.0.1",
+                                Integer.parseInt(getValue(ClusterParamCfg.CLUSTER_PLUGINS_PORT))).usePlaintext(true).build();
+                        stub = DbleClusterGrpc.newBlockingStub(channel).withDeadlineAfter(GENERAL_GRPC_TIMEOUT, TimeUnit.SECONDS);
+                    }
+                }
+            }
+        });
+        nodes.setName("USHARD_RECONNECT_LISTENER");
+        nodes.start();
     }
 }

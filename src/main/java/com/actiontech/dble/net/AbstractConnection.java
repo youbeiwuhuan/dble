@@ -279,6 +279,9 @@ public abstract class AbstractConnection implements NIOConnection {
         }
 
         lastReadTime = TimeUtil.currentTimeMillis();
+        if (lastReadTime == lastWriteTime) {
+            lastWriteTime--;
+        }
         if (got < 0) {
             if (this instanceof MySQLConnection) {
                 ((MySQLConnection) this).closeInner("stream closed");
@@ -332,7 +335,6 @@ public abstract class AbstractConnection implements NIOConnection {
                     if (readBuffer != null) {
                         readBuffer.position(position);
                     }
-                    continue;
                 }
             } else {
                 // not read whole message package ,so check if buffer enough and
@@ -368,11 +370,7 @@ public abstract class AbstractConnection implements NIOConnection {
 
     private ByteBuffer ensureFreeSpaceOfReadBuffer(ByteBuffer buffer,
                                                    int offset, final int pkgLength) {
-        // need a large buffer to hold the package
-        if (pkgLength > maxPacketSize) {
-            throw new IllegalArgumentException("Packet size over the limit.");
-        } else if (buffer.capacity() < pkgLength) {
-
+        if (buffer.capacity() < pkgLength) {
             ByteBuffer newBuffer = processor.getBufferPool().allocate(pkgLength);
             lastLargeMessageTime = TimeUtil.currentTimeMillis();
             buffer.position(offset);
@@ -412,7 +410,7 @@ public abstract class AbstractConnection implements NIOConnection {
     }
 
     @Override
-    public final void write(ByteBuffer buffer) {
+    public void write(ByteBuffer buffer) {
 
         if (isSupportCompress()) {
             ByteBuffer newBuffer = CompressUtil.compressMysqlPacket(buffer, this, compressUnfinishedDataQueue);

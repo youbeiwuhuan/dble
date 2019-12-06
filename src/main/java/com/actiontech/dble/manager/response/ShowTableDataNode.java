@@ -14,6 +14,7 @@ import com.actiontech.dble.config.model.DBHostConfig;
 import com.actiontech.dble.config.model.SchemaConfig;
 import com.actiontech.dble.config.model.TableConfig;
 import com.actiontech.dble.manager.ManagerConnection;
+import com.actiontech.dble.singleton.ProxyMeta;
 import com.actiontech.dble.net.mysql.EOFPacket;
 import com.actiontech.dble.net.mysql.FieldPacket;
 import com.actiontech.dble.net.mysql.ResultSetHeaderPacket;
@@ -73,8 +74,8 @@ public final class ShowTableDataNode {
             c.writeErrMessage(ErrorCode.ER_UNKNOWN_ERROR, "The Correct Query Format Is:show @@datanodes where schema='?' and table ='?'");
             return;
         }
-        String schemaName = ma.group(2);
-        String tableName = ma.group(4);
+        String schemaName = StringUtil.removeAllApostrophe(ma.group(1));
+        String tableName = StringUtil.removeAllApostrophe(ma.group(5));
         if (DbleServer.getInstance().getSystemVariables().isLowerCaseTableNames()) {
             schemaName = schemaName.toLowerCase();
             tableName = tableName.toLowerCase();
@@ -86,7 +87,7 @@ public final class ShowTableDataNode {
             c.writeErrMessage(ErrorCode.ER_UNKNOWN_ERROR, "the schema [" + schemaName + "] does not exists");
             return;
         } else if (schemaConfig.isNoSharding()) {
-            if (DbleServer.getInstance().getTmManager().checkTableExists(schemaName, tableName)) {
+            if (ProxyMeta.getInstance().getTmManager().checkTableExists(schemaName, tableName)) {
                 dataNodes = Collections.singletonList(schemaConfig.getDataNode());
             }
         } else {
@@ -95,7 +96,7 @@ public final class ShowTableDataNode {
                 if (schemaConfig.getDataNode() == null) {
                     c.writeErrMessage(ErrorCode.ER_UNKNOWN_ERROR, "the table [" + tableName + "] in schema [" + schemaName + "] does not exists");
                     return;
-                } else if (DbleServer.getInstance().getTmManager().checkTableExists(schemaName, tableName)) {
+                } else if (ProxyMeta.getInstance().getTmManager().checkTableExists(schemaName, tableName)) {
                     dataNodes = Collections.singletonList(schemaConfig.getDataNode());
                 }
             } else {

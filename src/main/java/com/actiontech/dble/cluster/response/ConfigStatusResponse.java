@@ -7,7 +7,7 @@ package com.actiontech.dble.cluster.response;
 
 import com.actiontech.dble.DbleServer;
 import com.actiontech.dble.btrace.provider.ClusterDelayProvider;
-import com.actiontech.dble.cluster.ClusterGeneralConfig;
+import com.actiontech.dble.singleton.ClusterGeneralConfig;
 import com.actiontech.dble.cluster.ClusterHelper;
 import com.actiontech.dble.cluster.ClusterParamCfg;
 import com.actiontech.dble.cluster.ClusterPathUtil;
@@ -16,8 +16,13 @@ import com.actiontech.dble.cluster.listener.ClusterClearKeyListener;
 import com.actiontech.dble.config.loader.zkprocess.zookeeper.process.ConfStatus;
 import com.actiontech.dble.manager.response.ReloadConfig;
 import com.actiontech.dble.manager.response.RollbackConfig;
+import com.actiontech.dble.meta.ReloadManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+
+import static com.actiontech.dble.meta.ReloadStatus.TRIGGER_TYPE_CLUSTER;
 
 /**
  * Created by szf on 2018/1/31.
@@ -57,7 +62,17 @@ public class ConfigStatusResponse implements ClusterXmlLoader {
                 try {
                     ClusterDelayProvider.delayBeforeSlaveRollback();
                     LOGGER.info("rollback " + pathValue.getKey() + " " + pathValue.getValue() + " " + pathValue.getChangeType());
-                    RollbackConfig.rollback();
+                    try {
+                        boolean result = RollbackConfig.rollback(TRIGGER_TYPE_CLUSTER);
+                        if (!checkLocalResult(result)) {
+                            return;
+                        }
+                    } catch (Exception e) {
+                        throw e;
+                    } finally {
+                        ReloadManager.reloadFinish();
+                    }
+
                     ClusterDelayProvider.delayAfterSlaveRollback();
                     LOGGER.info("rollback config: sent config status success to ucore start");
                     ClusterHelper.setKV(ClusterPathUtil.getSelfConfStatusPath(), ClusterPathUtil.SUCCESS);
@@ -76,10 +91,29 @@ public class ConfigStatusResponse implements ClusterXmlLoader {
                 ClusterDelayProvider.delayBeforeSlaveReload();
                 if (status.getStatus() == ConfStatus.Status.RELOAD_ALL) {
                     LOGGER.info("reload_all " + pathValue.getKey() + " " + pathValue.getValue() + " " + pathValue.getChangeType());
-                    ReloadConfig.reloadAll(Integer.parseInt(status.getParams()));
-                } else {
-                    LOGGER.info("reload " + pathValue.getKey() + " " + pathValue.getValue() + " " + pathValue.getChangeType());
-                    ReloadConfig.reload();
+                    final ReentrantReadWriteLock lock = DbleServer.getInstance().getConfig().getLock();
+                    lock.writeLock().lock();
+                    try {
+                        if (!ReloadManager.startReload(TRIGGER_TYPE_CLUSTER, ConfStatus.Status.RELOAD_ALL)) {
+                            LOGGER.info("reload config failed because self is in reloading");
+                            ClusterHelper.setKV(ClusterPathUtil.getSelfConfStatusPath(),
+                                    "Reload status error ,other client or cluster may in reload");
+                            return;
+                        }
+                        try {
+                            boolean result = ReloadConfig.reloadAll(Integer.parseInt(status.getParams()));
+                            if (!checkLocalResult(result)) {
+                                return;
+                            }
+                        } catch (Exception e) {
+                            throw e;
+                        } finally {
+                            ReloadManager.reloadFinish();
+                        }
+
+                    } finally {
+                        lock.writeLock().unlock();
+                    }
                 }
                 ClusterDelayProvider.delayAfterSlaveReload();
                 LOGGER.info("reload config: sent config status success to ucore start");
@@ -92,6 +126,16 @@ public class ConfigStatusResponse implements ClusterXmlLoader {
                 LOGGER.info("reload config: sent config status failed to ucore end");
             }
         }
+    }
+
+
+    private boolean checkLocalResult(boolean result) throws Exception {
+        if (!result) {
+            LOGGER.info("reload config: sent config status success to ucore start");
+            ClusterDelayProvider.delayAfterSlaveReload();
+            ClusterHelper.setKV(ClusterPathUtil.getSelfConfStatusPath(), "interrupt by command.should reload config again");
+        }
+        return result;
     }
 
     @Override

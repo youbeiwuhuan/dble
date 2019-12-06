@@ -10,9 +10,9 @@ package com.actiontech.dble.config.loader.zkprocess.zookeeper.process;
  */
 public class ConfStatus {
     public enum Status {
-        RELOAD,
         RELOAD_ALL,
-        ROLLBACK
+        ROLLBACK,
+        RELOAD_META
     }
 
     private String split = ";";

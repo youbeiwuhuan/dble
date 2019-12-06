@@ -6,7 +6,7 @@
 package com.actiontech.dble.cluster.listener;
 
 import com.actiontech.dble.DbleServer;
-import com.actiontech.dble.cluster.ClusterGeneralConfig;
+import com.actiontech.dble.singleton.ClusterGeneralConfig;
 import com.actiontech.dble.cluster.ClusterHelper;
 import com.actiontech.dble.cluster.ClusterParamCfg;
 import com.actiontech.dble.cluster.ClusterPathUtil;
@@ -18,12 +18,14 @@ import com.actiontech.dble.cluster.response.ClusterXmlLoader;
 import com.actiontech.dble.cluster.response.DdlChildResponse;
 import com.actiontech.dble.config.loader.zkprocess.zookeeper.process.BinlogPause;
 import com.actiontech.dble.config.loader.zkprocess.zookeeper.process.PauseInfo;
-import com.actiontech.dble.server.status.OnlineLockStatus;
+import com.actiontech.dble.singleton.PauseDatanodeManager;
+import com.actiontech.dble.singleton.ProxyMeta;
+import com.actiontech.dble.singleton.OnlineStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static com.actiontech.dble.cluster.ClusterPathUtil.SEPARATOR;
 
@@ -33,12 +35,12 @@ import static com.actiontech.dble.cluster.ClusterPathUtil.SEPARATOR;
 public class ClusterOffLineListener implements Runnable {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ClusterOffLineListener.class);
-    private volatile Map<String, String> onlineMap = new HashMap<>();
+    private volatile Map<String, String> onlineMap = new ConcurrentHashMap<>();
     private long index = 0;
 
 
     public Map<String, String> copyOnlineMap() {
-        return new HashMap<>(onlineMap);
+        return new ConcurrentHashMap<>(onlineMap);
     }
 
     private void checkDDLAndRelease(String serverId) {
@@ -46,9 +48,9 @@ public class ClusterOffLineListener implements Runnable {
         //and than the ddl server is shutdown
         for (Map.Entry<String, String> en : DdlChildResponse.getLockMap().entrySet()) {
             if (serverId.equals(en.getValue())) {
-                DbleServer.getInstance().getTmManager().removeMetaLock(en.getKey().split("\\.")[0], en.getKey().split("\\.")[1]);
+                ProxyMeta.getInstance().getTmManager().removeMetaLock(en.getKey().split("\\.")[0], en.getKey().split("\\.")[1]);
                 DdlChildResponse.getLockMap().remove(en.getKey());
-                ClusterHelper.cleanPath(ClusterPathUtil.getDDLPath(en.getKey()) + "/");
+                ClusterHelper.cleanPath(ClusterPathUtil.getDDLPath(en.getKey()));
             }
         }
     }
@@ -70,7 +72,7 @@ public class ClusterOffLineListener implements Runnable {
                 }
             }
         } catch (Exception e) {
-            LOGGER.warn(" server offline binlog status check error");
+            LOGGER.warn(" server offline binlog status check error: ", e);
         }
     }
 
@@ -83,7 +85,7 @@ public class ClusterOffLineListener implements Runnable {
                 if (pauseInfo.getFrom().equals(serverId)) {
                     needRelease = true;
                 }
-            } else if (DbleServer.getInstance().getMiManager().getIsPausing().get()) {
+            } else if (PauseDatanodeManager.getInstance().getIsPausing().get()) {
                 needRelease = true;
             }
             if (needRelease) {
@@ -92,7 +94,7 @@ public class ClusterOffLineListener implements Runnable {
             }
 
         } catch (Exception e) {
-            LOGGER.warn(" server offline binlog status check error");
+            LOGGER.warn(" server offline binlog status check error: ", e);
         }
     }
 
@@ -114,7 +116,7 @@ public class ClusterOffLineListener implements Runnable {
                     continue;
                 }
                 //LOGGER.debug("the index of the single key "+path+" is "+index);
-                Map<String, String> newMap = new HashMap<>();
+                Map<String, String> newMap = new ConcurrentHashMap<>();
                 for (int i = 0; i < output.getKeysCount(); i++) {
                     newMap.put(output.getKeys(i), output.getValues(i));
                 }
@@ -137,7 +139,7 @@ public class ClusterOffLineListener implements Runnable {
                 onlineMap = newMap;
                 index = output.getIndex();
             } catch (Exception e) {
-                LOGGER.warn("error in offline listener :", e);
+                LOGGER.warn("error in offline listener: ", e);
             }
         }
     }
@@ -145,7 +147,7 @@ public class ClusterOffLineListener implements Runnable {
     private boolean reInitOnlineStatus() {
         try {
             //release and renew lock
-            boolean init = OnlineLockStatus.getInstance().metaUcoreInit(false);
+            boolean init = OnlineStatus.getInstance().rebuildOnline();
             if (init) {
                 LOGGER.info("rewrite server online status success");
             } else {
@@ -153,7 +155,7 @@ public class ClusterOffLineListener implements Runnable {
             }
             return true;
         } catch (Exception e) {
-            LOGGER.warn("rewrite server online status failed", e);
+            LOGGER.warn("rewrite server online status failed: ", e);
             //alert
             return false;
         }

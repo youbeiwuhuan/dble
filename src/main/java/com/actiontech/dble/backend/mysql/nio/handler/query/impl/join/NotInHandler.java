@@ -20,6 +20,7 @@ import com.actiontech.dble.net.mysql.FieldPacket;
 import com.actiontech.dble.net.mysql.RowDataPacket;
 import com.actiontech.dble.plan.Order;
 import com.actiontech.dble.server.NonBlockingSession;
+import com.actiontech.dble.singleton.BufferPoolManager;
 import com.actiontech.dble.util.FairLinkedBlockingDeque;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -65,7 +66,7 @@ public class NotInHandler extends OwnThreadDMLHandler {
                                  byte[] eofNull, boolean isLeft, final BackendConnection conn) {
         session.setHandlerStart(this);
         if (this.pool == null)
-            this.pool = DbleServer.getInstance().getBufferPool();
+            this.pool = BufferPoolManager.getBufferPool();
 
         if (isLeft) {
             // logger.debug("field eof left");
@@ -128,8 +129,9 @@ public class NotInHandler extends OwnThreadDMLHandler {
         MySQLConnection conn = (MySQLConnection) objects[0];
         LocalResult leftLocal = null, rightLocal = null;
         try {
+            boolean caseInsensitive = CharsetUtil.isCaseInsensitive(session.getSource().getCharset().getCollation());
             Comparator<RowDataPacket> notInComparator = new TwoTableComparator(leftFieldPackets, rightFieldPackets,
-                    leftOrders, rightOrders, this.isAllPushDown(), this.type());
+                    leftOrders, rightOrders, this.isAllPushDown(), this.type(), caseInsensitive);
 
             leftLocal = takeFirst(leftQueue);
             rightLocal = takeFirst(rightQueue);

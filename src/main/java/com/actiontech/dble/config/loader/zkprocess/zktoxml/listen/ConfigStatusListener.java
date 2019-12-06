@@ -7,7 +7,9 @@ package com.actiontech.dble.config.loader.zkprocess.zktoxml.listen;
 
 import com.actiontech.dble.DbleServer;
 import com.actiontech.dble.btrace.provider.ClusterDelayProvider;
+import com.actiontech.dble.cluster.ClusterHelper;
 import com.actiontech.dble.cluster.ClusterParamCfg;
+import com.actiontech.dble.cluster.ClusterPathUtil;
 import com.actiontech.dble.config.loader.zkprocess.comm.NotifyService;
 import com.actiontech.dble.config.loader.zkprocess.comm.ZkConfig;
 import com.actiontech.dble.config.loader.zkprocess.comm.ZookeeperProcessListen;
@@ -15,6 +17,7 @@ import com.actiontech.dble.config.loader.zkprocess.zookeeper.process.ConfStatus;
 import com.actiontech.dble.config.loader.zkprocess.zookeeper.process.ZkMultiLoader;
 import com.actiontech.dble.manager.response.ReloadConfig;
 import com.actiontech.dble.manager.response.RollbackConfig;
+import com.actiontech.dble.meta.ReloadManager;
 import com.actiontech.dble.util.KVPathUtil;
 import com.actiontech.dble.util.ZKUtils;
 import org.apache.curator.framework.CuratorFramework;
@@ -24,6 +27,8 @@ import org.slf4j.LoggerFactory;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.Set;
+
+import static com.actiontech.dble.meta.ReloadStatus.TRIGGER_TYPE_CLUSTER;
 
 /**
  * Created by huqing.yan on 2017/6/23.
@@ -57,7 +62,17 @@ public class ConfigStatusListener extends ZkMultiLoader implements NotifyService
             if (status.getStatus() == ConfStatus.Status.ROLLBACK) {
                 try {
                     ClusterDelayProvider.delayBeforeSlaveRollback();
-                    RollbackConfig.rollback();
+                    try {
+                        boolean result = RollbackConfig.rollback(TRIGGER_TYPE_CLUSTER);
+                        if (!checkLocalResult(result)) {
+                            return true;
+                        }
+                    } catch (Exception e) {
+                        throw e;
+                    } finally {
+                        ReloadManager.reloadFinish();
+                    }
+
                     ClusterDelayProvider.delayAfterSlaveRollback();
                     LOGGER.info("rollback config: sent config status success to zk start");
                     ZKUtils.createTempNode(KVPathUtil.getConfStatusPath(), ZkConfig.getInstance().getValue(ClusterParamCfg.CLUSTER_CFG_MYID),
@@ -83,10 +98,22 @@ public class ConfigStatusListener extends ZkMultiLoader implements NotifyService
             try {
                 ClusterDelayProvider.delayBeforeSlaveReload();
                 LOGGER.info("reload config: ready to reload config");
-                if (status.getStatus() == ConfStatus.Status.RELOAD_ALL) {
-                    ReloadConfig.reloadAll(Integer.parseInt(status.getParams()));
-                } else {
-                    ReloadConfig.reload();
+                if (!ReloadManager.startReload(TRIGGER_TYPE_CLUSTER, ConfStatus.Status.RELOAD_ALL)) {
+                    LOGGER.info("reload config failed because self is in reloading");
+                    ClusterHelper.setKV(ClusterPathUtil.getSelfConfStatusPath(),
+                            "Reload status error ,other client or cluster may in reload");
+                    return true;
+                }
+                boolean result;
+                try {
+                    result = ReloadConfig.reloadAll(Integer.parseInt(status.getParams()));
+                    if (!checkLocalResult(result)) {
+                        return true;
+                    }
+                } catch (Exception e) {
+                    throw e;
+                } finally {
+                    ReloadManager.reloadFinish();
                 }
                 ClusterDelayProvider.delayAfterSlaveReload();
                 LOGGER.info("reload config: sent config status success to zk start");
@@ -100,5 +127,15 @@ public class ConfigStatusListener extends ZkMultiLoader implements NotifyService
             }
         }
         return true;
+    }
+
+
+    private boolean checkLocalResult(boolean result) throws Exception {
+        if (!result) {
+            LOGGER.info("reload config: sent config status success to ucore start");
+            ZKUtils.createTempNode(KVPathUtil.getConfStatusPath(), ZkConfig.getInstance().getValue(ClusterParamCfg.CLUSTER_CFG_MYID),
+                    "interrupt by command.should reload config again".getBytes(StandardCharsets.UTF_8));
+        }
+        return result;
     }
 }

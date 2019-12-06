@@ -44,7 +44,7 @@ public final class ShowHelp {
         FIELDS[i++].setPacketId(++packetId);
 
         FIELDS[i] = PacketUtil.getField("DESCRIPTION", Fields.FIELD_TYPE_VAR_STRING);
-        FIELDS[i++].setPacketId(++packetId);
+        FIELDS[i].setPacketId(++packetId);
 
         EOF.setPacketId(++packetId);
     }
@@ -129,7 +129,7 @@ public final class ShowHelp {
         HELPS.put("show @@sysparam", "Report system param");
         HELPS.put("show @@syslog limit=?", "Report system log");
         HELPS.put("show @@white", "Report server white host ");
-        HELPS.put("show @@directmemory=1 or 2", "Report server direct memory usage");
+        HELPS.put("show @@directmemory", "Report server direct memory pool usage");
         HELPS.put("show @@command.count", "Report the current number of querys");
         HELPS.put("show @@connection.count", "Report the current number of connections");
         HELPS.put("show @@backend.statistics", "Report backend node info");
@@ -143,6 +143,9 @@ public final class ShowHelp {
         HELPS.put("show @@dataNodes where schema='?' and table='?'", "Report the data nodes info of a table");
         HELPS.put("show @@algorithm where schema='?' and table='?'", "Report the algorithm info of a table");
         HELPS.put("show @@ddl", "Report all ddl info in progress");
+        HELPS.put("show @@reload_status", "Report latest reload status in this dble");
+        HELPS.put("show @@user", "Report all user in this dble");
+        HELPS.put("show @@user.privilege", "Report privilege of all business user in this dble");
         // switch
         HELPS.put("switch @@datasource name:index", "Switch dataSource");
 
@@ -157,10 +160,11 @@ public final class ShowHelp {
         // reload
         HELPS.put("reload @@config", "Reload basic config from file");
         HELPS.put("reload @@config_all", "Reload all config from file");
-        HELPS.put("reload @@metadata [where schema=? [and table=?] | where table in ('schema1'.'table1',...)]", "Reload metadata of tables or specified table");
+        HELPS.put("reload @@metadata [where schema=? [and table=?] | where table in ('schema1.table1',...)]", "Reload metadata of tables or specified table");
         HELPS.put("reload @@sqlslow=", "Set Slow SQL Time(ms)");
         HELPS.put("reload @@user_stat", "Reset show @@sql  @@sql.sum @@sql.slow");
         HELPS.put("reload @@query_cf[=table&column]", "Reset show @@sql.conditiont");
+        HELPS.put("release @@reload_metadata", "Release reload process , unlock the config meta lock");
         // rollback
         HELPS.put("rollback @@config", "Rollback all config from memory");
 
@@ -208,6 +212,13 @@ public final class ShowHelp {
         HELPS.put("show @@alert", "Show if the alert is enabled");
         HELPS.put("enable @@alert", "Turn on the alert");
         HELPS.put("disable @@alert", "Turn off the alert");
+        HELPS.put("dataHost @@disable name='?' (node = '?')", "disable some dataSources/dataHost");
+        HELPS.put("dataHost @@enable name='?' (node = '?')", "enable some dataSources/dataHost");
+        HELPS.put("dataHost @@switch name='?' master='?'", "switch writeHost and readHost in one dataHost");
+        HELPS.put("dataHost @@events ", "show all the dataHost ha event which not finished yet ");
+
+        //dump file
+        HELPS.put("split src dest -r500 -w500 -l10000", "split dump file into multi dump files according to dataNode");
 
         // list sort
         KEYS.addAll(HELPS.keySet());

@@ -48,7 +48,7 @@
 
         <!--connection -->
         <!--<property name="charset">utf8</property>-->
-        <!--<property name="maxPacketSize">16777216</property>-->
+        <!--<property name="maxPacketSize">4194304</property>-->
         <!--<property name="txIsolation">3</property>-->
 
         <!--consistency-->
@@ -166,7 +166,7 @@
 
     <user name="root">
         <property name="password">123456</property>
-        <property name="schemas">testdb</property>
+        <property name="schemas">testdb,testdb2</property>
 
         <!-- table's DML privileges  INSERT/UPDATE/SELECT/DELETE -->
         <!--

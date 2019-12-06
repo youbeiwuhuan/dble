@@ -9,19 +9,16 @@ import com.actiontech.dble.DbleServer;
 import com.actiontech.dble.alarm.AlarmCode;
 import com.actiontech.dble.alarm.Alert;
 import com.actiontech.dble.alarm.AlertUtil;
+import com.actiontech.dble.backend.datasource.AbstractPhysicalDBPool;
 import com.actiontech.dble.backend.datasource.PhysicalDBNode;
-import com.actiontech.dble.backend.datasource.PhysicalDBPool;
 import com.actiontech.dble.backend.datasource.PhysicalDBPoolDiff;
 import com.actiontech.dble.config.model.*;
 import com.actiontech.dble.config.util.ConfigException;
 import com.actiontech.dble.config.util.ConfigUtil;
 import com.actiontech.dble.route.parser.ManagerParseConfig;
 import com.actiontech.dble.route.parser.util.Pair;
-import com.actiontech.dble.route.sequence.handler.DistributedSequenceHandler;
-import com.actiontech.dble.route.sequence.handler.IncrSequenceMySQLHandler;
-import com.actiontech.dble.route.sequence.handler.IncrSequenceTimeHandler;
-import com.actiontech.dble.route.sequence.handler.IncrSequenceZKHandler;
 import com.actiontech.dble.server.variables.SystemVariables;
+import com.actiontech.dble.singleton.*;
 import com.actiontech.dble.util.StringUtil;
 import com.actiontech.dble.util.TimeUtil;
 import org.slf4j.Logger;
@@ -32,13 +29,13 @@ import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
  * @author mycat
  */
 public class ServerConfig {
     protected static final Logger LOGGER = LoggerFactory.getLogger(ServerConfig.class);
-    private static final int RELOAD = 1;
     private static final int ROLLBACK = 2;
     private static final int RELOAD_ALL = 3;
 
@@ -51,8 +48,8 @@ public class ServerConfig {
     private volatile Map<String, SchemaConfig> schemas2;
     private volatile Map<String, PhysicalDBNode> dataNodes;
     private volatile Map<String, PhysicalDBNode> dataNodes2;
-    private volatile Map<String, PhysicalDBPool> dataHosts;
-    private volatile Map<String, PhysicalDBPool> dataHosts2;
+    private volatile Map<String, AbstractPhysicalDBPool> dataHosts;
+    private volatile Map<String, AbstractPhysicalDBPool> dataHosts2;
     private volatile Map<ERTable, Set<ERTable>> erRelations;
     private volatile Map<ERTable, Set<ERTable>> erRelations2;
     private volatile boolean dataHostWithoutWR;
@@ -61,12 +58,12 @@ public class ServerConfig {
     private volatile long rollbackTime;
     private volatile int status;
     private volatile boolean changing = false;
-    private final ReentrantLock lock;
+    private final ReentrantReadWriteLock lock;
     private ConfigInitializer confInitNew;
 
     public ServerConfig() {
         //read schema.xml,rule.xml and server.xml
-        confInitNew = new ConfigInitializer(true, false);
+        confInitNew = new ConfigInitializer(false);
         this.system = confInitNew.getSystem();
         this.users = confInitNew.getUsers();
         this.schemas = confInitNew.getSchemas();
@@ -80,9 +77,9 @@ public class ServerConfig {
 
         this.reloadTime = TimeUtil.currentTimeMillis();
         this.rollbackTime = -1L;
-        this.status = RELOAD;
+        this.status = RELOAD_ALL;
 
-        this.lock = new ReentrantLock();
+        this.lock = new ReentrantReadWriteLock();
 
     }
 
@@ -102,9 +99,9 @@ public class ServerConfig {
 
         this.reloadTime = TimeUtil.currentTimeMillis();
         this.rollbackTime = -1L;
-        this.status = RELOAD;
+        this.status = RELOAD_ALL;
 
-        this.lock = new ReentrantLock();
+        this.lock = new ReentrantReadWriteLock();
     }
 
     private void waitIfChanging() {
@@ -114,7 +111,6 @@ public class ServerConfig {
     }
 
     public SystemConfig getSystem() {
-        waitIfChanging();
         return system;
     }
 
@@ -164,12 +160,12 @@ public class ServerConfig {
         return dataNodes2;
     }
 
-    public Map<String, PhysicalDBPool> getDataHosts() {
+    public Map<String, AbstractPhysicalDBPool> getDataHosts() {
         waitIfChanging();
         return dataHosts;
     }
 
-    public Map<String, PhysicalDBPool> getBackupDataHosts() {
+    public Map<String, AbstractPhysicalDBPool> getBackupDataHosts() {
         waitIfChanging();
         return dataHosts2;
     }
@@ -194,7 +190,7 @@ public class ServerConfig {
         return firewall2;
     }
 
-    public ReentrantLock getLock() {
+    public ReentrantReadWriteLock getLock() {
         return lock;
     }
 
@@ -213,19 +209,22 @@ public class ServerConfig {
         return dataHostWithoutWR2;
     }
 
-    public void reload(Map<String, UserConfig> newUsers, Map<String, SchemaConfig> newSchemas,
-                       Map<String, PhysicalDBNode> newDataNodes, Map<String, PhysicalDBPool> newDataHosts,
-                       Map<ERTable, Set<ERTable>> newErRelations, FirewallConfig newFirewall,
-                       SystemVariables newSystemVariables, boolean newDataHostWithoutWR, boolean reloadAll,
-                       final int loadAllMode) throws SQLNonTransientException {
+    public boolean reload(Map<String, UserConfig> newUsers, Map<String, SchemaConfig> newSchemas,
+                          Map<String, PhysicalDBNode> newDataNodes, Map<String, AbstractPhysicalDBPool> newDataHosts,
+                          Map<String, AbstractPhysicalDBPool> changeOrAddDataHosts,
+                          Map<String, AbstractPhysicalDBPool> recycleDataHosts,
+                          Map<ERTable, Set<ERTable>> newErRelations, FirewallConfig newFirewall,
+                          SystemVariables newSystemVariables, boolean newDataHostWithoutWR,
+                          final int loadAllMode) throws SQLNonTransientException {
 
-        apply(newUsers, newSchemas, newDataNodes, newDataHosts, newErRelations, newFirewall,
-                newSystemVariables, newDataHostWithoutWR, reloadAll, loadAllMode);
+        boolean result = apply(newUsers, newSchemas, newDataNodes, newDataHosts, changeOrAddDataHosts, recycleDataHosts, newErRelations, newFirewall,
+                newSystemVariables, newDataHostWithoutWR, loadAllMode);
         this.reloadTime = TimeUtil.currentTimeMillis();
-        this.status = reloadAll ? RELOAD_ALL : RELOAD;
+        this.status = RELOAD_ALL;
+        return result;
     }
 
-    private void calcDiffForMetaData(Map<String, SchemaConfig> newSchemas, Map<String, PhysicalDBNode> newDataNodes, boolean isLoadAll, int loadAllMode,
+    private void calcDiffForMetaData(Map<String, SchemaConfig> newSchemas, Map<String, PhysicalDBNode> newDataNodes, int loadAllMode,
                                      List<Pair<String, String>> delTables, List<Pair<String, String>> reloadTables,
                                      List<String> delSchema, List<String> reloadSchema) {
         for (Map.Entry<String, SchemaConfig> schemaEntry : this.schemas.entrySet()) {
@@ -233,13 +232,13 @@ public class ServerConfig {
             SchemaConfig newSchemaConfig = newSchemas.get(oldSchema);
             if (newSchemaConfig == null) {
                 delSchema.add(oldSchema);
-            } else if (!isLoadAll || (loadAllMode & ManagerParseConfig.OPTR_MODE) == 0) { // reload @@config_all not contains -r
+            } else if ((loadAllMode & ManagerParseConfig.OPTR_MODE) == 0) { // reload @@config_all not contains -r
                 SchemaConfig oldSchemaConfig = schemaEntry.getValue();
                 if (!StringUtil.equalsWithEmpty(oldSchemaConfig.getDataNode(), newSchemaConfig.getDataNode())) {
                     delSchema.add(oldSchema);
                     reloadSchema.add(oldSchema);
                 } else {
-                    if (isLoadAll && newSchemaConfig.getDataNode() != null) { // reload config_all
+                    if (newSchemaConfig.getDataNode() != null) { // reload config_all
                         //check data node and datahost change
                         List<String> strDataNodes = Collections.singletonList(newSchemaConfig.getDataNode());
                         if (isDataNodeChanged(strDataNodes, newDataNodes)) {
@@ -312,10 +311,10 @@ public class ServerConfig {
 
     private boolean isDataHostChanged(List<String> strDataNodes, Map<String, PhysicalDBNode> newDataNodes) {
         for (String strDataNode : strDataNodes) {
-            PhysicalDBPool newDBPool = newDataNodes.get(strDataNode).getDbPool();
-            PhysicalDBPool oldDBPool = dataNodes.get(strDataNode).getDbPool();
+            AbstractPhysicalDBPool newDBPool = newDataNodes.get(strDataNode).getDbPool();
+            AbstractPhysicalDBPool oldDBPool = dataNodes.get(strDataNode).getDbPool();
             PhysicalDBPoolDiff diff = new PhysicalDBPoolDiff(oldDBPool, newDBPool);
-            if (diff.getChangeType() != PhysicalDBPoolDiff.CHANGE_TYPE_NO) {
+            if (!PhysicalDBPoolDiff.CHANGE_TYPE_NO.equals(diff.getChangeType())) {
                 return true;
             }
         }
@@ -326,37 +325,36 @@ public class ServerConfig {
         return status == RELOAD_ALL && users2 != null && schemas2 != null && firewall2 != null && dataNodes2 != null && dataHosts2 != null;
     }
 
-    public boolean canRollback() {
-        return status == RELOAD && users2 != null && schemas2 != null && firewall2 != null;
-    }
+    public boolean rollback(Map<String, UserConfig> backupUsers, Map<String, SchemaConfig> backupSchemas,
+                            Map<String, PhysicalDBNode> backupDataNodes, Map<String, AbstractPhysicalDBPool> backupDataHosts,
+                            Map<ERTable, Set<ERTable>> backupErRelations, FirewallConfig backFirewall, boolean backDataHostWithoutWR) throws SQLNonTransientException {
 
-    public void rollback(Map<String, UserConfig> backupUsers, Map<String, SchemaConfig> backupSchemas,
-                         Map<String, PhysicalDBNode> backupDataNodes, Map<String, PhysicalDBPool> backupDataHosts,
-                         Map<ERTable, Set<ERTable>> backupErRelations, FirewallConfig backFirewall, boolean backDataHostWithoutWR) throws SQLNonTransientException {
-
-        apply(backupUsers, backupSchemas, backupDataNodes, backupDataHosts, backupErRelations, backFirewall,
-                DbleServer.getInstance().getSystemVariables(), backDataHostWithoutWR, status == RELOAD_ALL, ManagerParseConfig.OPTR_MODE);
+        boolean result = apply(backupUsers, backupSchemas, backupDataNodes, backupDataHosts, backupDataHosts, this.dataHosts, backupErRelations, backFirewall,
+                DbleServer.getInstance().getSystemVariables(), backDataHostWithoutWR, ManagerParseConfig.OPTR_MODE);
         this.rollbackTime = TimeUtil.currentTimeMillis();
         this.status = ROLLBACK;
+        return result;
     }
 
-    private void apply(Map<String, UserConfig> newUsers,
-                       Map<String, SchemaConfig> newSchemas,
-                       Map<String, PhysicalDBNode> newDataNodes,
-                       Map<String, PhysicalDBPool> newDataHosts,
-                       Map<ERTable, Set<ERTable>> newErRelations,
-                       FirewallConfig newFirewall, SystemVariables newSystemVariables,
-                       boolean newDataHostWithoutWR, boolean isLoadAll, final int loadAllMode) throws SQLNonTransientException {
+    private boolean apply(Map<String, UserConfig> newUsers,
+                          Map<String, SchemaConfig> newSchemas,
+                          Map<String, PhysicalDBNode> newDataNodes,
+                          Map<String, AbstractPhysicalDBPool> newDataHosts,
+                          Map<String, AbstractPhysicalDBPool> changeOrAddDataHosts,
+                          Map<String, AbstractPhysicalDBPool> recycleDataHosts,
+                          Map<ERTable, Set<ERTable>> newErRelations,
+                          FirewallConfig newFirewall, SystemVariables newSystemVariables,
+                          boolean newDataHostWithoutWR, final int loadAllMode) throws SQLNonTransientException {
         List<Pair<String, String>> delTables = new ArrayList<>();
         List<Pair<String, String>> reloadTables = new ArrayList<>();
         List<String> delSchema = new ArrayList<>();
         List<String> reloadSchema = new ArrayList<>();
-        calcDiffForMetaData(newSchemas, newDataNodes, isLoadAll, loadAllMode, delTables, reloadTables, delSchema, reloadSchema);
-        final ReentrantLock metaLock = DbleServer.getInstance().getTmManager().getMetaLock();
+        calcDiffForMetaData(newSchemas, newDataNodes, loadAllMode, delTables, reloadTables, delSchema, reloadSchema);
+        final ReentrantLock metaLock = ProxyMeta.getInstance().getTmManager().getMetaLock();
         metaLock.lock();
         this.changing = true;
         try {
-            String checkResult = DbleServer.getInstance().getTmManager().metaCountCheck();
+            String checkResult = ProxyMeta.getInstance().getTmManager().metaCountCheck();
             if (checkResult != null) {
                 LOGGER.warn(checkResult);
                 throw new SQLNonTransientException(checkResult, "HY000", ErrorCode.ER_DOING_DDL);
@@ -365,19 +363,15 @@ public class ServerConfig {
             // 1 stop heartbeat
             // 2 backup
             //--------------------------------------------
-            if (isLoadAll) {
-                Map<String, PhysicalDBPool> oldDataHosts = this.dataHosts;
-                if (oldDataHosts != null) {
-                    for (PhysicalDBPool oldDbPool : oldDataHosts.values()) {
-                        if (oldDbPool != null) {
-                            oldDbPool.stopHeartbeat();
-                        }
+            if (recycleDataHosts != null) {
+                for (AbstractPhysicalDBPool oldDbPool : recycleDataHosts.values()) {
+                    if (oldDbPool != null) {
+                        oldDbPool.stopHeartbeat();
                     }
                 }
-                this.dataNodes2 = this.dataNodes;
-                this.dataHosts2 = this.dataHosts;
             }
-
+            this.dataNodes2 = this.dataNodes;
+            this.dataHosts2 = this.dataHosts;
             this.users2 = this.users;
             this.schemas2 = this.schemas;
             this.firewall2 = this.firewall;
@@ -388,45 +382,45 @@ public class ServerConfig {
             // 1 start heartbeat
             // 2 apply the configure
             //---------------------------------------------------
-            if (isLoadAll) {
-                if (newDataHosts != null) {
-                    for (PhysicalDBPool newDbPool : newDataHosts.values()) {
-                        if (newDbPool != null && !newDataHostWithoutWR) {
-                            DbleServer.getInstance().saveDataHostIndex(newDbPool.getHostName(), newDbPool.getActiveIndex(),
-                                    this.system.isUseZKSwitch() && DbleServer.getInstance().isUseZK());
-                            newDbPool.startHeartbeat();
-                        }
+            if (changeOrAddDataHosts != null) {
+                for (AbstractPhysicalDBPool newDbPool : changeOrAddDataHosts.values()) {
+                    if (newDbPool != null && !newDataHostWithoutWR) {
+                        DbleServer.getInstance().saveDataHostIndex(newDbPool.getHostName(), newDbPool.getActiveIndex(),
+                                this.system.isUseZKSwitch() && ClusterGeneralConfig.isUseZK());
+                        newDbPool.startHeartbeat();
                     }
                 }
-                this.dataNodes = newDataNodes;
-                this.dataHosts = newDataHosts;
-                this.dataHostWithoutWR = newDataHostWithoutWR;
-                DbleServer.getInstance().reloadSystemVariables(newSystemVariables);
-                DbleServer.getInstance().getCacheService().reloadCache(newSystemVariables.isLowerCaseTableNames());
-                DbleServer.getInstance().getRouterService().loadTableId2DataNodeCache(DbleServer.getInstance().getCacheService());
             }
+            this.dataNodes = newDataNodes;
+            this.dataHosts = newDataHosts;
+            this.dataHostWithoutWR = newDataHostWithoutWR;
+            DbleServer.getInstance().reloadSystemVariables(newSystemVariables);
+            CacheService.getInstance().reloadCache(newSystemVariables.isLowerCaseTableNames());
             this.users = newUsers;
             this.schemas = newSchemas;
             this.firewall = newFirewall;
             this.erRelations = newErRelations;
-            DbleServer.getInstance().getCacheService().clearCache();
+            CacheService.getInstance().clearCache();
+            HaConfigManager.getInstance().init();
             this.changing = false;
             if (!newDataHostWithoutWR) {
-                reloadMetaData(delTables, reloadTables, delSchema, reloadSchema);
+                return reloadMetaData(delTables, reloadTables, delSchema, reloadSchema);
             }
         } finally {
             this.changing = false;
             metaLock.unlock();
         }
+        return true;
     }
 
-    private void reloadMetaData(List<Pair<String, String>> delTables, List<Pair<String, String>> reloadTables, List<String> delSchema, List<String> reloadSchema) {
+    private boolean reloadMetaData(List<Pair<String, String>> delTables, List<Pair<String, String>> reloadTables, List<String> delSchema, List<String> reloadSchema) {
+        boolean reloadResult = true;
         if (delSchema.size() > 0) {
             if (LOGGER.isDebugEnabled()) {
                 LOGGER.debug("metadata will delete schema:" + StringUtil.join(delSchema, ","));
             }
             for (String schema : delSchema) {
-                DbleServer.getInstance().getTmManager().getCatalogs().remove(schema);
+                ProxyMeta.getInstance().getTmManager().getCatalogs().remove(schema);
             }
             LOGGER.info("metadata finished for deleted schemas");
         }
@@ -436,7 +430,7 @@ public class ServerConfig {
                 LOGGER.debug("metadata will delete Tables:" + tables);
             }
             for (Pair<String, String> table : delTables) {
-                DbleServer.getInstance().getTmManager().getCatalogs().get(table.getKey()).dropTable(table.getValue());
+                ProxyMeta.getInstance().getTmManager().getCatalogs().get(table.getKey()).dropTable(table.getValue());
             }
             LOGGER.info("metadata finished for deleted tables");
         }
@@ -456,17 +450,14 @@ public class ServerConfig {
                     LOGGER.debug("metadata will reload Tables:" + tables);
                 }
                 for (Pair<String, String> table : reloadTables) {
-                    Set<String> tables = specifiedSchemas.get(table.getKey());
-                    if (tables == null) {
-                        tables = new HashSet<>();
-                        specifiedSchemas.put(table.getKey(), tables);
-                    }
+                    Set<String> tables = specifiedSchemas.computeIfAbsent(table.getKey(), k -> new HashSet<>());
                     tables.add(table.getValue());
                 }
             }
-            DbleServer.getInstance().reloadMetaData(this, specifiedSchemas);
+            reloadResult = ProxyMeta.getInstance().reloadMetaData(this, specifiedSchemas);
             LOGGER.info("metadata finished for changes of schemas and tables");
         }
+        return reloadResult;
     }
 
     private String changeTablesToString(List<Pair<String, String>> delTables) {
@@ -482,21 +473,6 @@ public class ServerConfig {
         }
         return sb.toString();
     }
-
-    public void simplyApply(Map<String, UserConfig> newUsers,
-                            Map<String, SchemaConfig> newSchemas,
-                            Map<String, PhysicalDBNode> newDataNodes,
-                            Map<String, PhysicalDBPool> newDataHosts,
-                            Map<ERTable, Set<ERTable>> newErRelations,
-                            FirewallConfig newFirewall) {
-        this.users = newUsers;
-        this.schemas = newSchemas;
-        this.dataNodes = newDataNodes;
-        this.dataHosts = newDataHosts;
-        this.firewall = newFirewall;
-        this.erRelations = newErRelations;
-    }
-
 
     /**
      * turned all the config into lowerCase config
@@ -526,7 +502,7 @@ public class ServerConfig {
 
 
         if (erRelations != null) {
-            HashMap<ERTable, Set<ERTable>> newErMap = new HashMap<ERTable, Set<ERTable>>();
+            HashMap<ERTable, Set<ERTable>> newErMap = new HashMap<>();
             for (Map.Entry<ERTable, Set<ERTable>> entry : erRelations.entrySet()) {
                 ERTable key = entry.getKey();
                 Set<ERTable> value = entry.getValue();
@@ -547,22 +523,7 @@ public class ServerConfig {
     }
 
     public void loadSequence() {
-        //load global sequence
-        if (system.getSequnceHandlerType() == SystemConfig.SEQUENCE_HANDLER_MYSQL) {
-            IncrSequenceMySQLHandler.getInstance().load(DbleServer.getInstance().getSystemVariables().isLowerCaseTableNames());
-        }
-
-        if (system.getSequnceHandlerType() == SystemConfig.SEQUENCE_HANDLER_LOCAL_TIME) {
-            IncrSequenceTimeHandler.getInstance().load();
-        }
-
-        if (system.getSequnceHandlerType() == SystemConfig.SEQUENCE_HANDLER_ZK_DISTRIBUTED) {
-            DistributedSequenceHandler.getInstance().load();
-        }
-
-        if (system.getSequnceHandlerType() == SystemConfig.SEQUENCE_HANDLER_ZK_GLOBAL_INCREMENT) {
-            IncrSequenceZKHandler.getInstance().load(DbleServer.getInstance().getSystemVariables().isLowerCaseTableNames());
-        }
+        SequenceManager.load(DbleServer.getInstance().getSystemVariables().isLowerCaseTableNames());
     }
 
     public void selfChecking0() throws ConfigException {

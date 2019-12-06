@@ -48,6 +48,7 @@ public class SchemasParseXmlImpl implements ParseXmlServiceInf<Schemas> {
         return schema;
     }
 
+
     @Override
     public void parseToXmlWrite(Schemas data, String outputFile, String dataName) {
         try {
@@ -56,5 +57,11 @@ public class SchemasParseXmlImpl implements ParseXmlServiceInf<Schemas> {
             LOGGER.warn("SchemasParseXmlImpl parseToXmlWrite IOException", e);
         }
     }
+
+
+    public void parseToXmlWriteWithException(Schemas data, String outputFile, String dataName) throws IOException {
+        this.parseBean.baseParseWriteToXml(data, outputFile, dataName);
+    }
+
 
 }

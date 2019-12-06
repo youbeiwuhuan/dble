@@ -151,6 +151,7 @@ public final class ShowSysParam {
         paramValues.add(sysConfig.getSqlSlowTime() + "ms");
         paramValues.add(sysConfig.getMaxCharsPerColumn() + "");
         paramValues.add(sysConfig.getMaxRowSizeToFile() + "");
+        paramValues.add(sysConfig.isUseOuterHa() + "");
 
 
         for (int i = 0; i < PARAM_NAMES.length; i++) {
@@ -252,6 +253,7 @@ public final class ShowSysParam {
             "sqlSlowTime",
             "maxCharsPerColumn",
             "maxRowSizeToFile",
+            "useOuterHa",
     };
 
     private static final String[] PARAM_DESCRIPTION = {
@@ -278,8 +280,8 @@ public final class ShowSysParam {
             "Whether the cost time of query can be track by Btrace.The default value is 0",
             "The max cost total percentage.The default value is 100",
             "The percentage of cost sample.The default value is 1",
-            "The initially charset of connection. The default is UTF8",
-            "The maximum size of one packet. The default is 16MB.",
+            "The initially charset of connection. The default is utf8mb4",
+            "The maximum size of one packet. The default is 4MB.",
             "The initially isolation level of the front end connection. The default is REPEATABLE_READ",
             "Whether the consistency tableStructure check is enabled.The default value is 0",
             "The period of consistency tableStructure check .The default value is 30*60*1000",
@@ -335,6 +337,7 @@ public final class ShowSysParam {
             "The threshold of Slow Query, the default is 100ms",
             "The maximum number of characters allowed for per column when load data.The default value is 65535",
             "The maximum row size,if over this value,row data will be saved to file when load data.The default value is 10000",
+            "Whether use outer ha component ",
     };
 
     private static final String[] ISOLATION_LEVELS = {"", "READ_UNCOMMITTED", "READ_COMMITTED", "REPEATABLE_READ", "SERIALIZABLE"};

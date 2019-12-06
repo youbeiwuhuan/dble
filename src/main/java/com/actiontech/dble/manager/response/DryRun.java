@@ -5,10 +5,9 @@
 
 package com.actiontech.dble.manager.response;
 
-import com.actiontech.dble.DbleServer;
 import com.actiontech.dble.backend.datasource.PhysicalDBNode;
 import com.actiontech.dble.backend.mysql.PacketUtil;
-import com.actiontech.dble.cluster.ClusterGeneralConfig;
+import com.actiontech.dble.singleton.ClusterGeneralConfig;
 import com.actiontech.dble.cluster.ClusterHelper;
 import com.actiontech.dble.cluster.ClusterParamCfg;
 import com.actiontech.dble.config.*;
@@ -54,7 +53,7 @@ public final class DryRun {
         FIELDS[i++].setPacketId(++packetId);
 
         FIELDS[i] = PacketUtil.getField("DETAIL", Fields.FIELD_TYPE_VAR_STRING);
-        FIELDS[i++].setPacketId(++packetId);
+        FIELDS[i].setPacketId(++packetId);
 
         EOF.setPacketId(++packetId);
     }
@@ -63,11 +62,11 @@ public final class DryRun {
     private DryRun() {
     }
 
-    public static void execute(ManagerConnection c, String stmt) {
+    public static void execute(ManagerConnection c) {
         LOGGER.info("reload config(dry-run): load all xml info start");
         ConfigInitializer loader;
         try {
-            loader = new ConfigInitializer(true, false);
+            loader = new ConfigInitializer(false);
         } catch (Exception e) {
             c.writeErrMessage(ErrorCode.ER_UNKNOWN_ERROR, e.getMessage());
             return;
@@ -115,7 +114,7 @@ public final class DryRun {
 
         userCheck(list, serverConfig);
 
-        if (DbleServer.getInstance().isUseGeneralCluster()) {
+        if (ClusterGeneralConfig.isUseGeneralCluster()) {
             ucoreConnectionTest(list);
         } else {
             list.add(new ErrorInfo("Cluster", "NOTICE", "Dble is in single mod"));
@@ -143,10 +142,10 @@ public final class DryRun {
 
         for (SchemaConfig schema : serverConfig.getSchemas().values()) {
             for (TableConfig table : schema.getTables().values()) {
-                StringBuffer sb = new StringBuffer("");
+                StringBuilder sb = new StringBuilder("");
                 for (String exDn : table.getDataNodes()) {
                     if (tableMap.get(exDn) != null && !tableMap.get(exDn).contains(table.getName())) {
-                        sb.append(exDn + ",");
+                        sb.append(exDn).append(",");
                     }
                 }
 
@@ -226,7 +225,7 @@ public final class DryRun {
     private static void userCheck(List<ErrorInfo> list, ServerConfig serverConfig) {
         Map<String, UserConfig> userMap = serverConfig.getUsers();
         if (userMap != null && userMap.size() > 0) {
-            Set<String> schema = new HashSet<String>();
+            Set<String> schema = new HashSet<>();
             boolean hasManagerUser = false;
             boolean hasServerUser = false;
             for (UserConfig user : userMap.values()) {

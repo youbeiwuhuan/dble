@@ -24,7 +24,6 @@ import com.alibaba.druid.sql.ast.expr.SQLPropertyExpr;
 import com.alibaba.druid.sql.ast.statement.*;
 import com.alibaba.druid.sql.dialect.mysql.ast.statement.MySqlDeleteStatement;
 import com.alibaba.druid.sql.dialect.mysql.ast.statement.MySqlSelectQueryBlock;
-import com.alibaba.druid.sql.ast.statement.SQLUnionQuery;
 import com.alibaba.druid.sql.dialect.mysql.ast.statement.MySqlUpdateStatement;
 
 import java.sql.SQLException;
@@ -113,7 +112,7 @@ public final class SchemaUtil {
                 return schemaInfo;
             }
         }
-        schemaInfo.tableAlias = tableAlias == null ? schemaInfo.table : tableAlias;
+        schemaInfo.tableAlias = tableAlias == null ? schemaInfo.table : StringUtil.removeBackQuote(tableAlias);
         if (schemaInfo.schema == null) {
             String msg = "No database selected";
             throw new SQLException(msg, "3D000", ErrorCode.ER_NO_DB_ERROR);
@@ -187,6 +186,10 @@ public final class SchemaUtil {
                 if (!isNoSharding(source, sqlSelectQuery, stmt, new SQLSelectStatement(new SQLSelect(sqlSelectQuery)), contextSchema, schemas, dataNode)) {
                     return false;
                 }
+            } else if (tables instanceof SQLUnionQueryTableSource) {
+                if (!isNoSharding(source, ((SQLUnionQueryTableSource) tables).getUnion(), stmt, contextSchema, schemas, dataNode)) {
+                    return false;
+                }
             } else {
                 return false;
             }
@@ -258,6 +261,7 @@ public final class SchemaUtil {
         private SchemaConfig schemaConfig;
         private boolean dual = false;
         private String tableAlias;
+
         @Override
         public String toString() {
             return "SchemaInfo{" + "table='" + table + '\'' +

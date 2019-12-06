@@ -7,6 +7,7 @@ package com.actiontech.dble.route.parser.druid;
 
 import com.actiontech.dble.DbleServer;
 import com.actiontech.dble.route.util.RouterUtil;
+import com.actiontech.dble.util.StringUtil;
 import com.alibaba.druid.sql.ast.SQLExpr;
 import com.alibaba.druid.sql.ast.SQLName;
 import com.alibaba.druid.sql.ast.SQLObject;
@@ -139,6 +140,7 @@ public class ServerSchemaStatVisitor extends MySqlSchemaStatVisitor {
         //        }
         return false;
     }
+
     @Override
     public boolean visit(SQLJoinTableSource x) {
         switch (x.getJoinType()) {
@@ -151,10 +153,57 @@ public class ServerSchemaStatVisitor extends MySqlSchemaStatVisitor {
                 inOuterJoin = false;
                 break;
         }
-        boolean result = super.visit(x);
+
+        SQLTableSource left = x.getLeft(), right = x.getRight();
+
+        left.accept(this);
+        right.accept(this);
+
+        SQLExpr condition = x.getCondition();
+        if (condition != null) {
+            condition.accept(this);
+        }
+
+        if (x.getUsing().size() > 0 &&
+                left instanceof SQLExprTableSource && right instanceof SQLExprTableSource) {
+            SQLExpr leftExpr = ((SQLExprTableSource) left).getExpr();
+            SQLExpr rightExpr = ((SQLExprTableSource) right).getExpr();
+
+            for (SQLExpr expr : x.getUsing()) {
+                if (expr instanceof SQLIdentifierExpr) {
+                    String name = ((SQLIdentifierExpr) expr).getName();
+                    /*
+                    when the shard1 a join shard2 b using(id)
+                    the intermediate condition should be a.id = b.id instead of shard1.id = shard2.id
+                     */
+                    SQLPropertyExpr leftPropExpr = new SQLPropertyExpr(leftExpr, name);
+                    if (left.getAlias() != null) {
+                        leftPropExpr.setOwner(left.getAlias());
+                    }
+                    SQLPropertyExpr rightPropExpr = new SQLPropertyExpr(rightExpr, name);
+                    if (right.getAlias() != null) {
+                        rightPropExpr.setOwner(right.getAlias());
+                    }
+
+                    leftPropExpr.setResolvedTableSource(left);
+                    rightPropExpr.setResolvedTableSource(right);
+
+                    SQLBinaryOpExpr usingCondition = new SQLBinaryOpExpr(leftPropExpr, SQLBinaryOperator.Equality, rightPropExpr);
+                    usingCondition.accept(this);
+                }
+            }
+        }
+
         inOuterJoin = false;
-        return result;
+        return false;
     }
+
+    @Override
+    public boolean visit(SQLSubqueryTableSource x) {
+        putAliasToMap(x.getAlias(), "subquery");
+        return super.visit(x);
+    }
+
     @Override
     public boolean visit(SQLSelectStatement x) {
         aliasMap.clear();
@@ -219,6 +268,7 @@ public class ServerSchemaStatVisitor extends MySqlSchemaStatVisitor {
 
         return true;
     }
+
 
     @Override
     public boolean visit(SQLBinaryOpExpr x) {
@@ -299,10 +349,10 @@ public class ServerSchemaStatVisitor extends MySqlSchemaStatVisitor {
             String ident = identName.toString();
             currentTable = ident;
 
-            aliasMap.put(ident, ident);
+            putAliasToMap(ident, ident.replace("`", ""));
             String alias = x.getTableSource().getAlias();
             if (alias != null) {
-                aliasMap.put(alias, ident);
+                putAliasToMap(alias, ident.replace("`", ""));
             }
         } else {
             x.getTableSource().accept(this);
@@ -322,11 +372,11 @@ public class ServerSchemaStatVisitor extends MySqlSchemaStatVisitor {
             selectTableList.add(ident);
             String alias = x.getAlias();
             if (alias != null && !aliasMap.containsKey(alias)) {
-                putAliasToMap(alias, ident);
+                putAliasToMap(alias, ident.replace("`", ""));
             }
 
             if (!aliasMap.containsKey(ident)) {
-                putAliasToMap(ident, ident);
+                putAliasToMap(ident, ident.replace("`", ""));
             }
         } else {
             this.accept(x.getExpr());
@@ -434,21 +484,13 @@ public class ServerSchemaStatVisitor extends MySqlSchemaStatVisitor {
             if (betweenExpr.getTestExpr() instanceof SQLPropertyExpr) { //field has alias
                 tableName = ((SQLIdentifierExpr) ((SQLPropertyExpr) betweenExpr.getTestExpr()).getOwner()).getName();
                 column = ((SQLPropertyExpr) betweenExpr.getTestExpr()).getName();
-                if (aliasMap.containsKey(tableName)) {
-                    tableName = aliasMap.get(tableName);
-                }
-                return new Column(tableName, column);
             } else if (betweenExpr.getTestExpr() instanceof SQLIdentifierExpr) {
                 column = ((SQLIdentifierExpr) betweenExpr.getTestExpr()).getName();
                 tableName = getOwnerTableName(betweenExpr, column);
             }
-            String table = tableName;
-            if (aliasMap.containsKey(table)) {
-                table = aliasMap.get(table);
-            }
-
-            if (table != null && !"".equals(table)) {
-                return new Column(table, column);
+            if (tableName != null && !"".equals(tableName)) {
+                checkAliasInColumn(tableName);
+                return new Column(tableName, column);
             }
         }
         return null;
@@ -457,13 +499,6 @@ public class ServerSchemaStatVisitor extends MySqlSchemaStatVisitor {
     private Column getColumnByExpr(SQLIdentifierExpr expr) {
         String column = expr.getName();
         String table = currentTable;
-        if (table != null && aliasMap.containsKey(table)) {
-            table = aliasMap.get(table);
-            if (table == null) {
-                return null;
-            }
-        }
-
         if (table != null) {
             return new Column(table, column);
         }
@@ -485,14 +520,28 @@ public class ServerSchemaStatVisitor extends MySqlSchemaStatVisitor {
             } else {
                 tableName = ((SQLIdentifierExpr) owner).getName();
             }
-            String table = tableName;
-            if (aliasMap.containsKey(table)) {
-                table = aliasMap.get(table);
-            }
-            return new Column(table, column);
+            checkAliasInColumn(tableName);
+            return new Column(tableName, column);
         }
 
         return null;
+    }
+
+    private void checkAliasInColumn(String tableName) {
+        if (aliasMap.containsKey(tableName)) {
+            return;
+        }
+        String tempStr;
+        if (StringUtil.isAlias(tableName)) {
+            tempStr = tableName.replace("`", "");
+        } else {
+            tempStr = "`" + tableName + "`";
+        }
+        if (aliasMap.containsKey(tempStr)) {
+            putAliasToMap(tableName, aliasMap.get(tempStr));
+        } else {
+            putAliasToMap(tableName, tableName.replace("`", ""));
+        }
     }
 
     /**

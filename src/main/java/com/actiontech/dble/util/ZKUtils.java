@@ -7,6 +7,7 @@ package com.actiontech.dble.util;
 
 
 import com.actiontech.dble.config.loader.zkprocess.comm.ZkConfig;
+import com.actiontech.dble.singleton.OnlineStatus;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
 import org.apache.curator.framework.recipes.cache.PathChildrenCache;
@@ -101,5 +102,10 @@ public final class ZKUtils {
 
     public static void createTempNode(String path) throws Exception {
         curatorFramework.create().creatingParentsIfNeeded().withMode(CreateMode.EPHEMERAL).forPath(path);
+    }
+
+    public static void createOnline(String parent, String node, OnlineStatus instanceOnline) throws Exception {
+        String path = ZKPaths.makePath(parent, node);
+        curatorFramework.create().creatingParentsIfNeeded().withMode(CreateMode.EPHEMERAL).forPath(path, instanceOnline.toString().getBytes());
     }
 }

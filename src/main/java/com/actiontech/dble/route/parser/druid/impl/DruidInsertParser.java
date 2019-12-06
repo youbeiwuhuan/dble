@@ -12,6 +12,7 @@ import com.actiontech.dble.config.ServerPrivileges;
 import com.actiontech.dble.config.ServerPrivileges.CheckType;
 import com.actiontech.dble.config.model.SchemaConfig;
 import com.actiontech.dble.config.model.TableConfig;
+import com.actiontech.dble.singleton.ProxyMeta;
 import com.actiontech.dble.meta.protocol.StructureMeta;
 import com.actiontech.dble.net.ConnectionException;
 import com.actiontech.dble.plan.common.ptr.StringPtr;
@@ -25,6 +26,7 @@ import com.actiontech.dble.server.handler.ExplainHandler;
 import com.actiontech.dble.server.util.GlobalTableUtil;
 import com.actiontech.dble.server.util.SchemaUtil;
 import com.actiontech.dble.server.util.SchemaUtil.SchemaInfo;
+import com.actiontech.dble.singleton.SequenceManager;
 import com.actiontech.dble.util.StringUtil;
 import com.alibaba.druid.sql.SQLUtils;
 import com.alibaba.druid.sql.ast.SQLExpr;
@@ -284,9 +286,7 @@ public class DruidInsertParser extends DruidInsertReplaceParser {
                 LOGGER.info(msg);
                 throw new SQLNonTransientException(msg);
             }
-            if (nodeValuesMap.get(nodeIndex) == null) {
-                nodeValuesMap.put(nodeIndex, new ArrayList<ValuesClause>());
-            }
+            nodeValuesMap.putIfAbsent(nodeIndex, new ArrayList<ValuesClause>());
             nodeValuesMap.get(nodeIndex).add(valueClause);
         }
 
@@ -340,7 +340,7 @@ public class DruidInsertParser extends DruidInsertReplaceParser {
     private String convertInsertSQL(SchemaInfo schemaInfo, MySqlInsertStatement insert, String originSql, TableConfig tc,
                                     boolean isGlobalCheck) throws SQLNonTransientException {
 
-        StructureMeta.TableMeta orgTbMeta = DbleServer.getInstance().getTmManager().getSyncTableMeta(schemaInfo.getSchema(), schemaInfo.getTable());
+        StructureMeta.TableMeta orgTbMeta = ProxyMeta.getInstance().getTmManager().getSyncTableMeta(schemaInfo.getSchema(), schemaInfo.getTable());
         if (orgTbMeta == null)
             return originSql;
 
@@ -359,8 +359,9 @@ public class DruidInsertParser extends DruidInsertReplaceParser {
         if (insert.isIgnore()) {
             sb.append("ignore ");
         }
-        sb.append("into ");
+        sb.append("into `");
         sb.append(schemaInfo.getTable());
+        sb.append("`");
 
         List<SQLExpr> columns = insert.getColumns();
 
@@ -380,12 +381,12 @@ public class DruidInsertParser extends DruidInsertReplaceParser {
             if (isAutoIncrement) {
                 getIncrementKeyIndex(schemaInfo, tc.getTrueIncrementColumn());
                 autoIncrement = columns.size();
-                sb.append(",").append(tc.getTrueIncrementColumn());
+                sb.append(",").append("`").append(tc.getTrueIncrementColumn()).append("`");
                 colSize++;
             }
             if (isGlobalCheck) {
                 idxGlobal = isAutoIncrement ? columns.size() + 1 : columns.size();
-                sb.append(",").append(GlobalTableUtil.GLOBAL_TABLE_CHECK_COLUMN);
+                sb.append(",").append("`").append(GlobalTableUtil.GLOBAL_TABLE_CHECK_COLUMN).append("`");
                 colSize++;
             }
             sb.append(")");
@@ -420,9 +421,9 @@ public class DruidInsertParser extends DruidInsertReplaceParser {
         for (int i = 0; i < columns.size(); i++) {
             String columnName = columns.get(i).toString();
             if (i < columns.size() - 1) {
-                sb.append(columnName).append(",");
+                sb.append("`").append(StringUtil.removeBackQuote(columnName)).append("`").append(",");
             } else {
-                sb.append(columnName);
+                sb.append("`").append(StringUtil.removeBackQuote(columnName)).append("`");
             }
             String simpleColumnName = StringUtil.removeBackQuote(columnName);
             if (isGlobalCheck && simpleColumnName.equalsIgnoreCase(GlobalTableUtil.GLOBAL_TABLE_CHECK_COLUMN)) {
@@ -495,7 +496,7 @@ public class DruidInsertParser extends DruidInsertReplaceParser {
             if (i == idxGlobal) {
                 sb.append(String.valueOf(new Date().getTime()));
             } else if (i == autoIncrement) {
-                long id = DbleServer.getInstance().getSequenceHandler().nextId(tableKey);
+                long id = SequenceManager.getHandler().nextId(tableKey);
                 sb.append(id);
             } else {
                 String value = SQLUtils.toMySqlString(values.get(iValue++));

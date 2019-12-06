@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *
  * @author wuzhih
  */
-public class SQLJob implements ResponseHandler, Runnable {
+public class SQLJob implements ResponseHandler, Runnable, Cloneable {
 
     public static final Logger LOGGER = LoggerFactory.getLogger(SQLJob.class);
 
@@ -38,7 +38,7 @@ public class SQLJob implements ResponseHandler, Runnable {
     private BackendConnection connection;
     private final SQLJobHandler jobHandler;
     private final PhysicalDatasource ds;
-    private boolean isMustWriteNode;
+    private boolean isMustWriteNode = false;
     private AtomicBoolean finished = new AtomicBoolean(false);
     private volatile boolean testXid;
 
@@ -69,7 +69,7 @@ public class SQLJob implements ResponseHandler, Runnable {
                 PhysicalDBNode dn = DbleServer.getInstance().getConfig().getDataNodes().get(node.getName());
                 dn.getConnection(dn.getDatabase(), isMustWriteNode, true, node, this, node);
             } else {
-                ds.getConnection(schema, true, this, null);
+                ds.getConnection(schema, true, this, null, isMustWriteNode);
             }
         } catch (Exception e) {
             LOGGER.warn("can't get connection", e);
@@ -196,6 +196,19 @@ public class SQLJob implements ResponseHandler, Runnable {
                 dataNode + ",schema=" +
                 schema + ",sql=" + sql + ",  jobHandler=" +
                 jobHandler + "]";
+    }
+
+    @Override
+    public Object clone() {
+        SQLJob newSqlJob = null;
+        try {
+            newSqlJob = (SQLJob) super.clone();
+            newSqlJob.finished.set(false);
+        } catch (CloneNotSupportedException e) {
+            // ignore
+            LOGGER.warn("SQLJob CloneNotSupportedException, impossible");
+        }
+        return newSqlJob;
     }
 
 }

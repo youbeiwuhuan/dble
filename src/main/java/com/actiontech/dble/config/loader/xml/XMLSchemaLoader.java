@@ -5,7 +5,7 @@
 */
 package com.actiontech.dble.config.loader.xml;
 
-import com.actiontech.dble.backend.datasource.PhysicalDBPool;
+import com.actiontech.dble.backend.datasource.AbstractPhysicalDBPool;
 import com.actiontech.dble.config.ProblemReporter;
 import com.actiontech.dble.config.Versions;
 import com.actiontech.dble.config.loader.SchemaLoader;
@@ -91,14 +91,19 @@ public class XMLSchemaLoader implements SchemaLoader {
             dtd = ResourceUtil.getResourceAsStream(dtdFile);
             xml = ResourceUtil.getResourceAsStream(xmlFile);
             Element root = ConfigUtil.getDocument(dtd, xml).getDocumentElement();
-            String version = "2.18.12.0 or earlier";
+            String version = null;
             if (root.getAttributes().getNamedItem("version") != null) {
                 version = root.getAttributes().getNamedItem("version").getNodeValue();
             }
-            if (!version.equals(Versions.CONFIG_VERSION)) {
-                String message = "The server-version is " + Versions.CONFIG_VERSION + ",but the schema.xml version is " + version + ".There may be some incompatible config between two versions,please check it";
+            if (version != null && !Versions.CONFIG_VERSION.equals(version)) {
                 if (this.problemReporter != null) {
-                    this.problemReporter.warn(message);
+                    if (Versions.checkVersion(version)) {
+                        String message = "The dble-config-version is " + Versions.CONFIG_VERSION + ",but the schema.xml version is " + version + ".There may be some incompatible config between two versions, please check it";
+                        this.problemReporter.notice(message);
+                    } else {
+                        String message = "The dble-config-version is " + Versions.CONFIG_VERSION + ",but the schema.xml version is " + version + ".There must be some incompatible config between two versions, please check it";
+                        this.problemReporter.notice(message);
+                    }
                 }
             }
             loadDataHosts(root);
@@ -433,6 +438,7 @@ public class XMLSchemaLoader implements SchemaLoader {
 
     private void loadDataNodes(Element root) {
         NodeList list = root.getElementsByTagName("dataNode");
+        Set<String> checkSet = new HashSet<>();
         for (int i = 0, n = list.getLength(); i < n; i++) {
             Element element = (Element) list.item(i);
             String dnNamePre = element.getAttribute("name");
@@ -466,11 +472,11 @@ public class XMLSchemaLoader implements SchemaLoader {
                     String dnName = dnNames[k];
                     String databaseName = hd[1];
                     String hostName = hd[0];
-                    createDataNode(dnName, databaseName, hostName);
+                    createDataNode(dnName, databaseName, hostName, checkSet);
                 }
 
             } else {
-                createDataNode(dnNamePre, databaseStr, host);
+                createDataNode(dnNamePre, databaseStr, host, checkSet);
             }
 
         }
@@ -494,9 +500,14 @@ public class XMLSchemaLoader implements SchemaLoader {
         return mhdList;
     }
 
-    private void createDataNode(String dnName, String database, String host) {
+    private void createDataNode(String dnName, String database, String host, Set checkSet) {
 
         DataNodeConfig conf = new DataNodeConfig(dnName, database, host);
+        if (checkSet.contains(host + "#" + database)) {
+            throw new ConfigException("dataNode " + conf.getName() + " use the same dataHost&database with other dataNode");
+        } else {
+            checkSet.add(host + "#" + database);
+        }
         if (dataNodes.containsKey(conf.getName())) {
             throw new ConfigException("dataNode " + conf.getName() + " duplicated!");
         }
@@ -537,7 +548,7 @@ public class XMLSchemaLoader implements SchemaLoader {
         String passwordEncryty = DecryptUtil.dbHostDecrypt(usingDecrypt, nodeHost, user, password);
         String disabledStr = ConfigUtil.checkAndGetAttribute(node, "disabled", "false", problemReporter);
         boolean disabled = Boolean.parseBoolean(disabledStr);
-        String weightStr = ConfigUtil.checkAndGetAttribute(node, "weight", String.valueOf(PhysicalDBPool.WEIGHT), problemReporter);
+        String weightStr = ConfigUtil.checkAndGetAttribute(node, "weight", String.valueOf(AbstractPhysicalDBPool.WEIGHT), problemReporter);
         int weight = Integer.parseInt(weightStr);
 
         DBHostConfig conf = new DBHostConfig(nodeHost, ip, port, nodeUrl, user, passwordEncryty, disabled);
@@ -599,7 +610,10 @@ public class XMLSchemaLoader implements SchemaLoader {
             } else if (!"0".equals(tempReadHostAvailableStr)) {
                 problemReporter.warn("dataHost[" + name + "] attribute tempReadHostAvailable " + tempReadHostAvailableStr + " in schema.xml is illegal, use 0 replaced!");
             }
-            final String heartbeatSQL = element.getElementsByTagName("heartbeat").item(0).getTextContent();
+            Element heartbeat = (Element) element.getElementsByTagName("heartbeat").item(0);
+            final String heartbeatSQL = heartbeat.getTextContent();
+            final String strHBErrorRetryCount = ConfigUtil.checkAndGetAttribute(heartbeat, "errorRetryCount", "0", problemReporter);
+            final String strHBTimeout = ConfigUtil.checkAndGetAttribute(heartbeat, "timeout", "0", problemReporter);
 
             NodeList writeNodes = element.getElementsByTagName("writeHost");
             if (writeNodes.getLength() < 1) {
@@ -632,9 +646,7 @@ public class XMLSchemaLoader implements SchemaLoader {
                         } else {
                             hostNames.add(readHostName);
                         }
-                        if (!tmpDBHostConfig.isDisabled()) {
-                            readDbConfList.add(tmpDBHostConfig);
-                        }
+                        readDbConfList.add(tmpDBHostConfig);
                     }
                     if (readDbConfList.size() > 0) {
                         DBHostConfig[] readDbConfs = readDbConfList.toArray(new DBHostConfig[readDbConfList.size()]);
@@ -652,6 +664,8 @@ public class XMLSchemaLoader implements SchemaLoader {
             hostConf.setMinCon(minCon);
             hostConf.setBalance(balance);
             hostConf.setHearbeatSQL(heartbeatSQL);
+            hostConf.setHeartbeatTimeout(Integer.parseInt(strHBTimeout) * 1000);
+            hostConf.setErrorRetryCount(Integer.parseInt(strHBErrorRetryCount));
             dataHosts.put(hostConf.getName(), hostConf);
         }
     }

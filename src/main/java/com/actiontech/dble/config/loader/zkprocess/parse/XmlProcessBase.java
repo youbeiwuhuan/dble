@@ -172,16 +172,53 @@ public class XmlProcessBase {
      */
     public Object baseParseXmlToBean(String fileName) throws JAXBException, XMLStreamException {
         InputStream inputStream = ResourceUtil.getResourceAsStreamFromRoot(fileName);
-
         if (inputStream != null) {
             XMLInputFactory xif = XMLInputFactory.newFactory();
             xif.setProperty(XMLInputFactory.SUPPORT_DTD, false);
             XMLStreamReader xmlRead = xif.createXMLStreamReader(new StreamSource(inputStream));
             return unmarshaller.unmarshal(xmlRead);
-
         }
 
         return null;
     }
+
+
+    /**
+     * baseParseAndWriteToXml
+     *
+     * @param user
+     * @param inputPath
+     * @param name
+     * @Created 2016/9/15
+     */
+    public void baseParseWriteToXml(Object user, String inputPath, String name) throws IOException {
+        OutputStream out = null;
+        try {
+            Marshaller marshaller = this.jaxContext.createMarshaller();
+            marshaller.setProperty(Marshaller.JAXB_FORMATTED_OUTPUT, Boolean.TRUE);
+            marshaller.setProperty(Marshaller.JAXB_FRAGMENT, Boolean.TRUE);
+
+            if (null != name) {
+                marshaller.setProperty("com.sun.xml.internal.bind.xmlHeaders",
+                        String.format("<!DOCTYPE " + Versions.ROOT_PREFIX + ":%1$s SYSTEM \"%1$s.dtd\">", name));
+            }
+
+            Path path = Paths.get(inputPath);
+
+            out = Files.newOutputStream(path, StandardOpenOption.CREATE,
+                    StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+
+            marshaller.marshal(user, out);
+
+        } catch (JAXBException | IOException e) {
+            LOGGER.error("ZookeeperProcessListen parseToXml  error:Exception info:", e);
+            throw new IOException(e);
+        } finally {
+            if (out != null) {
+                out.close();
+            }
+        }
+    }
+
 
 }
